@@ -1,0 +1,36 @@
+{
+ "baseline": {
+  "20x20, 100 years": {
+   "events": 3420,
+   "peak_mb": 9.5,
+   "time_s": 0.399
+  },
+  "50x50, 100 years": {
+   "events": 21434,
+   "peak_mb": 17.1,
+   "time_s": 3.218
+  },
+  "default 100x100, 100 years": {
+   "events": 84021,
+   "peak_mb": 43.5,
+   "time_s": 23.344
+  }
+ },
+ "incremental": {
+  "20x20, 100 years": {
+   "events": 3423,
+   "peak_mb": 9.5,
+   "time_s": 0.227
+  },
+  "50x50, 100 years": {
+   "events": 21464,
+   "peak_mb": 17.1,
+   "time_s": 1.771
+  },
+  "default 100x100, 100 years": {
+   "events": 84028,
+   "peak_mb": 43.5,
+   "time_s": 11.914
+  }
+ }
+}

@@ -24,6 +24,12 @@ its strength; stuck blocks next to moving ones start slipping when their
 force exceeds their strength. Blocks never slip backwards. The event ends
 when no block moves. This replaces ~1e9 explicit steps through years of
 quiet loading by a few hundred steps per event.
+
+Performance: the spring force on every block is maintained incrementally
+(current_force). Loading adds k_p v_p dt to all blocks; after an event only
+the slipped blocks and their neighbours are recomputed. The slip kernel
+reuses preallocated work arrays, so an event costs O(blocks involved) plus a
+few O(n) vector operations, with no per-event allocation of grid-sized arrays.
 """
 import dataclasses
 
@@ -36,9 +42,11 @@ from . import grid
 @dataclasses.dataclass
 class SlipResult:
     """Outcome of one event: slipped block indices (in order of first failure),
-    their slips (m), duration (s), peak velocity (m/s), energy dissipated by
-    friction (J), work done by the plate during the event (J), integration steps."""
+    their displacements before the event and their slips (m), duration (s), peak
+    velocity (m/s), energy dissipated by friction (J), work done by the plate
+    during the event (J), integration steps."""
     slipped: np.ndarray
+    u_before: np.ndarray
     slip: np.ndarray
     duration_s: float
     peak_velocity_m_s: float
@@ -65,40 +73,46 @@ def _force(i, u, plate, nx, ny, kc, kp):
 
 
 @njit(cache=True)
-def _activate(i, active, slipped, order, n_order, act, n_act):
+def _activate(i, u, active, slipped, order, u_start, n_order, act, n_act):
+    # starts (or restarts) block i slipping; the first time, remember where it was
     active[i] = True
     act[n_act] = i
     if not slipped[i]:
         slipped[i] = True
         order[n_order] = i
+        u_start[i] = u[i]
         n_order += 1
     return n_order, n_act + 1
 
 
 @njit(cache=True)
-def _slip_kernel(u, v, static, fd, kc, kp, mass, nx, ny, plate, vp, dt, hypocentre, max_steps, order):
-    """Integrates one event in place (u, v). Returns
-    (plate, steps, n_slipped, peak velocity, dissipated energy, plate work, completed)."""
+def _slip_kernel(u, v, force, static, fd, kc, kp, mass, nx, ny, plate, vp, dt, hypocentre, max_steps,
+                 active, slipped, act, moved, acc, order, u_start):
+    """Integrates one event in place (u, v, force).
+
+    Work arrays: active, slipped (all False on entry and on return), act, moved,
+    acc, u_start (size n). On return order[:n_slipped] lists the slipped blocks in
+    order of first failure and u_start[order[k]] their displacements before.
+    Returns (plate, steps, n_slipped, peak velocity, dissipated energy, plate work, completed).
+    """
     n = u.shape[0]
-    active = np.zeros(n, dtype=np.bool_)
-    slipped = np.zeros(n, dtype=np.bool_)
-    act = np.empty(n, dtype=np.int64)       # indices of the slipping blocks
-    moved = np.empty(n, dtype=np.int64)     # blocks that moved in the current step
-    acc = np.zeros(n)
-    n_order, n_act = _activate(hypocentre, active, slipped, order, 0, act, 0)
+    plate_start = plate
+    n_order, n_act = _activate(hypocentre, u, active, slipped, order, u_start, 0, act, 0)
     sum_u = u.sum()
     peak = 0.0
     dissipated = 0.0
     work = 0.0
     steps = 0
+    completed = False
     while steps < max_steps:
         if n_act == 0:
             # quiet: did the (tiny) plate motion during the event push any other block over?
             for i in range(n):
                 if _force(i, u, plate, nx, ny, kc, kp) > static[i]:
-                    n_order, n_act = _activate(i, active, slipped, order, n_order, act, n_act)
+                    n_order, n_act = _activate(i, u, active, slipped, order, u_start, n_order, act, n_act)
             if n_act == 0:
-                return plate, steps, n_order, peak, dissipated, work, True
+                completed = True
+                break
         # velocity Verlet: a(t), then u(t + dt), then a(t + dt) and v(t + dt)
         for k in range(n_act):
             i = act[k]
@@ -142,9 +156,26 @@ def _slip_kernel(u, v, static, fd, kc, kp, mass, nx, ny, plate, vp, dt, hypocent
             for j in (i - 1 if col > 0 else -1, i + 1 if col < nx - 1 else -1,
                       i - nx if row > 0 else -1, i + nx if row < ny - 1 else -1):
                 if j >= 0 and not active[j] and _force(j, u, plate, nx, ny, kc, kp) > static[j]:
-                    n_order, n_act = _activate(j, active, slipped, order, n_order, act, n_act)
+                    n_order, n_act = _activate(j, u, active, slipped, order, u_start, n_order, act, n_act)
         steps += 1
-    return plate, steps, n_order, peak, dissipated, work, False
+    # update the maintained forces: the plate moved for everyone, and the slipped
+    # blocks and their neighbours are recomputed exactly
+    shift = kp * (plate - plate_start)
+    for i in range(n):
+        force[i] += shift
+    for k in range(n_order):
+        i = order[k]
+        row = i // nx
+        col = i - row * nx
+        force[i] = _force(i, u, plate, nx, ny, kc, kp)
+        for j in (i - 1 if col > 0 else -1, i + 1 if col < nx - 1 else -1,
+                  i - nx if row > 0 else -1, i + nx if row < ny - 1 else -1):
+            if j >= 0:
+                force[j] = _force(j, u, plate, nx, ny, kc, kp)
+    for k in range(n_order):  # restore the work-array invariant
+        slipped[order[k]] = False
+        active[order[k]] = False
+    return plate, steps, n_order, peak, dissipated, work, completed
 
 
 class Model:
@@ -161,6 +192,8 @@ class Model:
         Simulated time (s).
     static_force : ndarray (n_blocks,)
         Strength F_s,i of each block (N).
+    current_force : ndarray (n_blocks,)
+        Spring force on each block (N), maintained incrementally (equal to force()).
     """
 
     max_event_steps = 10_000_000
@@ -180,6 +213,11 @@ class Model:
         self.plate_m = self.fd / self.kp  # every block starts at the dynamic friction level
         self.time_s = 0.0
         self.static_force = self._draw_strengths(n)
+        self.current_force = self.force()
+        # work arrays reused by every event (see _slip_kernel)
+        self._work = dict(active=np.zeros(n, dtype=np.bool_), slipped=np.zeros(n, dtype=np.bool_),
+                          act=np.empty(n, dtype=np.int64), moved=np.empty(n, dtype=np.int64),
+                          acc=np.zeros(n), order=np.empty(n, dtype=np.int64), u_start=np.zeros(n))
 
     def _draw_strengths(self, size):
         # F_s,i = F_d + (F_s - F_d) x uniform[1 - h, 1 + h]
@@ -191,8 +229,7 @@ class Model:
     # ---- forces and energy --------------------------------------------------
     def coupling_force(self, u):
         """Force from the coupling springs on each block (N), for displacements u."""
-        cfg = self.config
-        g = grid.as_grid(u, cfg)
+        g = grid.as_grid(u, self.config)
         f = np.zeros_like(g, dtype=float)
         dx = self.kc * (g[:, 1:] - g[:, :-1])   # spring between columns c and c+1
         f[:, :-1] += dx
@@ -203,7 +240,7 @@ class Model:
         return f.ravel()
 
     def force(self):
-        """Total spring force on each block (N): coupling + loading."""
+        """Total spring force on each block (N), recomputed from scratch: coupling + loading."""
         return self.coupling_force(self.u) + self.kp * (self.plate_m - self.u)
 
     def elastic_energy(self):
@@ -216,34 +253,37 @@ class Model:
     def time_to_failure(self):
         """(seconds, index): time until the first block reaches its strength while all
         are stuck (forces grow at k_p v_p), and that block (0 s if one already has)."""
-        times = (self.static_force - self.force()) / (self.kp * self.vp)
-        idx = int(np.argmin(times))
-        return max(float(times[idx]), 0.0), idx
+        idx = int(np.argmax(self.current_force - self.static_force))
+        wait = (self.static_force[idx] - self.current_force[idx]) / (self.kp * self.vp)
+        return max(float(wait), 0.0), idx
 
     def load(self, seconds):
         """Advance the plate while every block stays stuck."""
         self.plate_m += self.vp * seconds
         self.time_s += seconds
+        self.current_force += self.kp * self.vp * seconds
 
     # ---- slip -------------------------------------------------------------------
     def slip(self, hypocentre):
         """Integrate one event starting with the failure of block `hypocentre`."""
-        u_before = self.u.copy()
-        order = np.empty(self.config.n_blocks, dtype=np.int64)
+        w = self._work
         plate, steps, n_slipped, peak, dissipated, work, completed = _slip_kernel(
-            self.u, self.v, self.static_force, self.fd, self.kc, self.kp, self.mass,
+            self.u, self.v, self.current_force, self.static_force, self.fd, self.kc, self.kp, self.mass,
             self.config.n_blocks_x, self.config.n_blocks_y, self.plate_m, self.vp, self.dt,
-            hypocentre, self.max_event_steps, order)
+            hypocentre, self.max_event_steps, w['active'], w['slipped'], w['act'], w['moved'], w['acc'],
+            w['order'], w['u_start'])
         if not completed:
             raise RuntimeError('event did not stop within %d steps' % self.max_event_steps)
         self.time_s += steps * self.dt
         self.plate_m = plate
-        slipped = order[:n_slipped].copy()
+        slipped = w['order'][:n_slipped].copy()
+        u_before = w['u_start'][slipped]
         if self.config.redraw_thresholds:
             # annealed disorder: slipped blocks heal with a new strength from the same
             # distribution, but a block that has just stopped can hold the load it
             # carries, so the new strength is never below its current force
-            current = self.force()[slipped]
-            self.static_force[slipped] = np.maximum(self._draw_strengths(n_slipped), current)
-        return SlipResult(slipped=slipped, slip=self.u[slipped] - u_before[slipped], duration_s=steps * self.dt,
-                          peak_velocity_m_s=peak, dissipated_j=dissipated, plate_work_j=work, steps=steps)
+            self.static_force[slipped] = np.maximum(self._draw_strengths(n_slipped),
+                                                    self.current_force[slipped])
+        return SlipResult(slipped=slipped, u_before=u_before, slip=self.u[slipped] - u_before,
+                          duration_s=steps * self.dt, peak_velocity_m_s=peak, dissipated_j=dissipated,
+                          plate_work_j=work, steps=steps)

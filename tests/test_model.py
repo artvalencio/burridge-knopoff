@@ -146,3 +146,19 @@ def test_events_are_reproducible_with_a_seed(small_config):
         ra, rb = run_one_event(a), run_one_event(b)
         np.testing.assert_array_equal(ra.slipped, rb.slipped)
     np.testing.assert_array_equal(a.u, b.u)
+
+
+def test_maintained_forces_stay_equal_to_a_full_recomputation():
+    model = Model(SimulationConfig(n_blocks_x=12, n_blocks_y=9, n_sensors_x=2, n_sensors_y=2, seed=5))
+    for __ in range(300):
+        run_one_event(model)
+    np.testing.assert_allclose(model.current_force, model.force(), rtol=1e-12, atol=1e-3)
+
+
+def test_slip_reports_the_exact_starting_positions():
+    model = Model(SimulationConfig(n_blocks_x=7, n_blocks_y=5, n_sensors_x=2, n_sensors_y=2, seed=6))
+    for __ in range(30):
+        u_before = model.u.copy()
+        result = run_one_event(model)
+        np.testing.assert_array_equal(result.u_before, u_before[result.slipped])
+        np.testing.assert_array_equal(result.slip, model.u[result.slipped] - u_before[result.slipped])

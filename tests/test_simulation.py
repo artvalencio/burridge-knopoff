@@ -109,9 +109,10 @@ def test_golden_run():
     got = golden_summary()
     assert len(got['events']) == len(expected['events'])
     for g, e in zip(got['events'], expected['events']):
-        assert g[1:3] == e[1:3]
-        np.testing.assert_allclose([g[0], g[3], g[4]], [e[0], e[3], e[4]], rtol=1e-9)
-    np.testing.assert_allclose(got['final_potentials'], expected['final_potentials'], rtol=1e-9)
+        assert g[1:3] == e[1:3]  # hypocentre and rupture size: exact
+        # continuous values: rounding may differ (e.g. incrementally maintained forces)
+        np.testing.assert_allclose([g[0], g[3], g[4]], [e[0], e[3], e[4]], rtol=1e-7)
+    np.testing.assert_allclose(got['final_potentials'], expected['final_potentials'], rtol=1e-7)
 
 
 if __name__ == '__main__':  # regenerate the golden file (only for intended changes)

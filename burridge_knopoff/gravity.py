@@ -27,22 +27,23 @@ from .config import G
 
 
 @njit(cache=True)
-def _change_kernel(delta, sensors, blocks, u_old, u_new, indices, gm):
-    # adds -G m sum_b (1/a - 1/b) for the listed blocks to delta (see module docstring)
+def _change_kernel(delta, sensors, blocks, indices, u_old, u_new, gm):
+    # adds -G m sum_k (1/a - 1/b) for blocks indices[k] moving from u_old[k] to
+    # u_new[k] (compact arrays aligned with indices; see module docstring)
     for s in range(sensors.shape[0]):
         acc = 0.0
         for k in range(indices.shape[0]):
             b = indices[k]
-            du = u_new[b] - u_old[b]
+            du = u_new[k] - u_old[k]
             if du == 0.0:
                 continue
             dx = sensors[s, 0] - blocks[b, 0]
             dy = sensors[s, 1] - blocks[b, 1]
             dz = sensors[s, 2] - blocks[b, 2]
             rest = dy * dy + dz * dz
-            a = np.sqrt((dx - u_new[b]) ** 2 + rest)
-            bb = np.sqrt((dx - u_old[b]) ** 2 + rest)
-            acc += du * (2.0 * dx - u_new[b] - u_old[b]) / (a + bb) / (a * bb)
+            a = np.sqrt((dx - u_new[k]) ** 2 + rest)
+            bb = np.sqrt((dx - u_old[k]) ** 2 + rest)
+            acc += du * (2.0 * dx - u_new[k] - u_old[k]) / (a + bb) / (a * bb)
         delta[s] -= gm * acc
 
 
@@ -82,14 +83,19 @@ class SensorArray:
     def potential_change(self, u):
         """Potential change (J/kg) at each sensor for block displacements u (m, along x)."""
         u = np.asarray(u, dtype=float)
+        moved = np.flatnonzero(u)
         delta = np.zeros(len(self.positions))
-        _change_kernel(delta, self.positions, self.block_positions, np.zeros_like(u), u,
-                       np.flatnonzero(u), G * self.block_mass)
-        return delta
+        return self.update_blocks(delta, moved, np.zeros(len(moved)), u[moved])
 
     def update(self, delta, u_old, u_new, indices):
         """Adds to delta (in place) the change due to the blocks `indices` moving
         from u_old to u_new; exact, and only these blocks are visited."""
-        _change_kernel(delta, self.positions, self.block_positions, np.asarray(u_old, dtype=float),
-                       np.asarray(u_new, dtype=float), np.asarray(indices, dtype=np.int64), G * self.block_mass)
+        indices = np.asarray(indices, dtype=np.int64)
+        return self.update_blocks(delta, indices, np.asarray(u_old, dtype=float)[indices],
+                                  np.asarray(u_new, dtype=float)[indices])
+
+    def update_blocks(self, delta, indices, u_before, u_after):
+        """Like update, with u_before/u_after given only for the blocks `indices`."""
+        _change_kernel(delta, self.positions, self.block_positions, np.asarray(indices, dtype=np.int64),
+                       np.asarray(u_before, dtype=float), np.asarray(u_after, dtype=float), G * self.block_mass)
         return delta

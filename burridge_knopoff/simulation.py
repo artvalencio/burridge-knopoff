@@ -115,9 +115,9 @@ def run(config, progress=None, store_dir=None):
         model.load(wait)
         record_until(model.time_s)
         start_s = model.time_s
-        u_old = model.u.copy()
         result = model.slip(hypocentre)
-        sensors.update(delta, u_old, model.u, result.slipped)
+        # only the slipped blocks moved: update the sensors from them alone
+        sensors.update_blocks(delta, result.slipped, result.u_before, model.u[result.slipped])
         dissipated += result.dissipated_j
         moment = ev.seismic_moment(result.slip, config)
         event_list.append(ev.Event(
