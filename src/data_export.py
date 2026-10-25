@@ -1,5 +1,10 @@
 """
-Data export module for saving simulation results to CSV files
+Export of the simulation results to CSV files (long format: one row per
+time and block, or per time and sensor).
+
+Note: the rows are built as one Python dict each before pandas sees them. For
+the default run (10,000 samples x 10,000 blocks) the block file has 1e8 rows,
+which needs tens of GB of RAM to build and several GB on disk.
 """
 
 import numpy as np
@@ -9,11 +14,11 @@ import config
 
 class DataExporter:
     """
-    Handles exporting simulation data to CSV files
+    Writes the simulation results to CSV files in config.CSV_DIR.
     """
-    
+
     def __init__(self):
-        """Initialize data exporter and create output directories"""
+        """Create the output directories (config.CSV_DIR and config.ANIMATION_DIR) if needed."""
         self.output_dir = config.OUTPUT_DIR
         self.csv_dir = config.CSV_DIR
         self.animation_dir = config.ANIMATION_DIR
@@ -33,8 +38,9 @@ class DataExporter:
         """
         print(f"\nExporting block positions to {filename}...")
         
+        # One dict per (time, block) row: simple but memory-hungry (see module docstring)
         data_rows = []
-        
+
         for t_idx, (t, pos) in enumerate(zip(times, positions)):
             for block_id in range(pos.shape[0]):
                 data_rows.append({
@@ -63,8 +69,9 @@ class DataExporter:
         """
         print(f"\nExporting sensor potentials to {filename}...")
         
+        # One row per (time, sensor); the sensor coordinates are repeated on every row
         data_rows = []
-        
+
         for t_idx, (t, pot) in enumerate(zip(times, potentials)):
             for sensor_id in range(pot.shape[0]):
                 data_rows.append({
@@ -98,7 +105,8 @@ class DataExporter:
         
         df = pd.DataFrame(events)
         
-        # Add epicenter coordinates in meters
+        # Epicentre coordinates in metres. KNOWN ISSUE: epicenter_i is the
+        # index along y in the block storage order, so x and y are swapped.
         df['epicenter_x'] = df['epicenter_i'] * config.BLOCK_SPACING
         df['epicenter_y'] = df['epicenter_j'] * config.BLOCK_SPACING
         

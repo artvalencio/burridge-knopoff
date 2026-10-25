@@ -1,322 +1,211 @@
 # Burridge-Knopoff Earthquake Simulation with Gravity Sensors
 
-A comprehensive Python implementation of the Burridge-Knopoff earthquake model with a gravity sensor array for measuring gravitational potential changes during seismic events.
+A Python implementation of a two-dimensional Burridge-Knopoff spring-block
+earthquake model, combined with an array of gravity sensors that record the
+change in gravitational potential caused by the motion of the blocks.
+
+> **Status: research prototype under repair.** The code runs, but the current
+> physics core has known errors and the default configuration cannot finish
+> in practice. Read [Status and known issues](#status-and-known-issues) before
+> using any result.
 
 ## Overview
 
-This simulation models earthquake dynamics using:
-- **100×100 grid** of blocks connected by springs (10,000 blocks total)
-- **Rate-and-state friction** for realistic stick-slip behavior
-- **10×10 gravity sensor array** positioned at height h above the fault
-- **Realistic parameters** based on Japanese Trench seismicity
-- **Comprehensive data export** to CSV files
-- **Animations** showing gravitational potential changes before/after seismic events
+- A grid of `N_BLOCKS_X × N_BLOCKS_Y` blocks (default 100 × 100) on the fault
+  plane z = 0, each connected to its four nearest neighbours by linear springs
+- Friction along the plate-motion direction (x), with a static branch and a
+  rate-and-state branch, plus linear damping
+- A `N_SENSORS_X × N_SENSORS_Y` array of gravity sensors (default 10 × 10) at a
+  height above the fault, measuring the potential Φ = −G Σ m/r of the blocks
+- Integration with SciPy's `solve_ivp` (RK45), sampling every `DT_SAMPLE` years
+- Event detection from the sampled block velocities
+- CSV export and plots/animations of the potential changes
 
-## Features
+## Status and known issues
 
-### Physical Model
-- 2D Burridge-Knopoff system with spring-block dynamics
-- Rate-and-state friction laws (Dieterich-Ruina)
-- Plate motion driving stress accumulation
-- Realistic earthquake parameters (Japanese subduction zone)
+The following problems were found by running the code on small grids. They
+are being fixed test-first; until then, treat outputs as illustrative only.
 
-### Gravity Sensing
-- 10×10 array of sensors at configurable height
-- Gravitational potential calculations using Newton's law
-- Tracks potential changes due to block displacements
-- Optimized with Numba for fast computation
+**Physics**
+- The plate does not load the blocks through springs: the plate's
+  *displacement* (m) is subtracted from a block's *velocity* (m/s) in the
+  friction law, which acts as a constant push along x.
+- The friction law is not the Dieterich-Ruina law (wrong reference
+  coefficient, clamped at μ_d, θ evolves with the absolute 3-D velocity), and
+  blocks never truly stick.
+- Only x carries forces besides the springs; y and z are integrated without
+  physics.
+- With the default parameters, overcoming static friction needs about 147 m of
+  spring stretch, about 1600 years at 9 cm/year, so no earthquakes are expected
+  within the default 100 years even after the loading is fixed.
+- All blocks are identical and start identically. Without heterogeneity the
+  model does not produce Gutenberg-Richter statistics.
 
-### Output
-- **CSV Files**:
-  - `block_positions_time.csv`: Position (x, y, z) of each block over time
-  - `sensor_potential_time.csv`: Gravitational potential at each sensor over time
-  - `earthquake_events.csv`: Detected seismic events with magnitude, location, time
-  
-- **Visualizations**:
-  - Animated 2D map of gravitational potential changes
-  - Before/after comparison plots for major events
-  - Magnitude-frequency distribution (Gutenberg-Richter)
+**Grid indexing**
+- Block positions are stored row by row along x, but the force kernel assumes
+  the opposite order: on non-square grids springs connect the wrong blocks.
+- Epicentre x and y are swapped in the event catalogue and in the plots.
+- The sensor array is offset by half a block spacing relative to the blocks.
+
+**Numerics and events**
+- Spring oscillations have periods of about 30 s, so the explicit RK45
+  integrator needs on the order of 10⁹ steps for 100 years. A 3 × 3 grid did
+  not complete 0.03 years (three samples) in 5 minutes; the default run does
+  not finish in practice.
+- Events are detected only at the sampling times (every 3.65 days by default),
+  so second-long slip events are mostly missed, and an event still running at
+  the end is not recorded.
+- The reported "magnitude" is log10(peak velocity) + 5, not a moment magnitude.
+
+**Gravity, memory, output**
+- `compute_gravity_acceleration` (not used by the pipeline) has the wrong sign.
+- Positions and velocities of every block are kept in memory at every sample:
+  about 4.8 GB for the default run. The block CSV would have 10⁸ rows (several
+  GB) and is built from one Python dict per row, needing tens of GB of RAM.
+- Plots fail when all potential changes are zero or of one sign (e.g. the
+  first frame), because of the diverging colour normalisation.
 
 ## Installation
 
-### Prerequisites
-- Python 3.8 or higher
-- FFmpeg (required for animation generation)
-
-### Install FFmpeg
-
-**Windows:**
-```bash
-# Using Chocolatey
-choco install ffmpeg
-
-# Or download from: https://ffmpeg.org/download.html
-```
-
-**Linux:**
-```bash
-sudo apt-get install ffmpeg
-```
-
-**macOS:**
-```bash
-brew install ffmpeg
-```
-
-### Install Python Dependencies
+Requirements:
+- Python 3.8 or later
+- numpy, scipy, matplotlib, pandas, numba and tqdm (see `requirements.txt`)
+- FFmpeg, only for the MP4 animation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Required packages:
-- numpy >= 1.24.0
-- scipy >= 1.10.0
-- matplotlib >= 3.7.0
-- pandas >= 2.0.0
-- numba >= 0.57.0
-- tqdm >= 4.65.0
+FFmpeg: `choco install ffmpeg` (Windows), `sudo apt-get install ffmpeg`
+(Linux), `brew install ffmpeg` (macOS), or https://ffmpeg.org/download.html.
 
 ## Usage
 
-### Basic Execution
-
-Run the simulation with default parameters:
+Run from the repository root (the `src` modules import `config` from there):
 
 ```bash
 python main.py
 ```
 
-The simulation will:
-1. Initialize the 100×100 block system
-2. Set up the 10×10 gravity sensor array
-3. Run the simulation for 100 years (configurable)
-4. Export data to CSV files in `output/csv/`
-5. Generate animations in `output/animations/`
+The script initialises the blocks and sensors, integrates the model, exports
+CSV files to `output/csv/` and writes plots and the animation to
+`output/animations/`.
+
+Because of the integration cost described above, even very small
+configurations (a few blocks, a few hundredths of a year, set in `config.py`)
+take many minutes. Fixing this is the first priority of the ongoing rework.
 
 ### Configuration
 
-Edit `config.py` to customize simulation parameters:
+All parameters live in `config.py` (SI units unless stated):
 
-```python
-# Grid size
-N_BLOCKS_X = 100
-N_BLOCKS_Y = 100
+| Group | Parameters |
+|---|---|
+| Grid | `N_BLOCKS_X`, `N_BLOCKS_Y`, `BLOCK_SPACING` (m), `BLOCK_MASS` (kg) |
+| Sensors | `N_SENSORS_X`, `N_SENSORS_Y`, `SENSOR_HEIGHT` (**km**) |
+| Time | `SIMULATION_TIME`, `DT_SAMPLE` (**years**) |
+| Springs | `SPRING_K_HORIZONTAL` (neighbours along the first grid index), `SPRING_K_VERTICAL` (along the second), N/m |
+| Friction | `MU_STATIC`, `MU_DYNAMIC`, `A_FRICTION`, `B_FRICTION`, `DC` (m), `V_CHARACTERISTIC` (m/s) |
+| Loading | `PLATE_VELOCITY` (**m/year**), `DAMPING` (kg/s) |
+| Solver | `RTOL`, `ATOL`, `MAX_STEP` (s) |
+| Events | `VELOCITY_THRESHOLD` (m/s), `MIN_EVENT_DURATION` (s) |
+| Output | `OUTPUT_DIR`, `CSV_DIR`, `ANIMATION_DIR` |
 
-# Sensor array
-N_SENSORS_X = 10
-N_SENSORS_Y = 10
-SENSOR_HEIGHT = 5.0  # km above fault
+`T_INITIAL_EQUILIBRATION` is defined but not used.
 
-# Simulation duration
-SIMULATION_TIME = 100.0  # years
-DT_SAMPLE = 0.01  # sampling interval (years)
+## Outputs
 
-# Physical parameters
-BLOCK_MASS = 1e12  # kg
-BLOCK_SPACING = 2000.0  # meters (2 km)
-PLATE_VELOCITY = 0.09  # m/year (9 cm/year)
+| File | Content |
+|---|---|
+| `output/csv/block_positions_time.csv` | `time, block_id, x, y, z`: every block at every sample (long format; very large) |
+| `output/csv/sensor_potential_time.csv` | `time, sensor_id, x_sensor, y_sensor, z_sensor, potential`: potential change in J/kg relative to the initial configuration |
+| `output/csv/earthquake_events.csv` | `time, duration, magnitude, max_velocity, epicenter_i, epicenter_j, epicenter_x, epicenter_y` (see the known issues about magnitude and epicentres) |
+| `output/animations/gravity_potential_animation.mp4` | map of the potential change over time; stars mark events within one year |
+| `output/animations/event_N_comparison.png` | potential change before, during and after the first three events |
+| `output/animations/magnitude_frequency.png` | histogram of the event magnitudes |
 
-# Friction parameters
-MU_STATIC = 0.6
-MU_DYNAMIC = 0.4
-```
+Times are in years in all outputs except event durations (seconds).
 
-## Project Structure
+## Project structure
 
 ```
 burridge-knopoff/
-├── config.py                   # Configuration parameters
-├── main.py                     # Main execution script
-├── requirements.txt            # Python dependencies
-├── README.md                   # This file
-├── src/
-│   ├── __init__.py
-│   ├── burridge_knopoff.py    # Core physics engine
-│   ├── gravity_sensors.py      # Gravity sensor array
-│   ├── solver.py               # Numerical integration
-│   ├── data_export.py          # CSV export functionality
-│   └── visualization.py        # Plotting and animation
-└── output/
-    ├── csv/                    # Exported CSV files
-    └── animations/             # Generated animations
+├── config.py               # parameters and block/sensor coordinate grids
+├── main.py                 # runs simulation, export and visualisation
+├── requirements.txt
+└── src/
+    ├── burridge_knopoff.py # state vector, forces (numba kernel), friction state
+    ├── solver.py           # time integration, sampling, event detection
+    ├── gravity_sensors.py  # gravitational potential at the sensors
+    ├── data_export.py      # CSV export
+    └── visualization.py    # animation and plots
 ```
 
-## Physical Parameters
+### State vector
 
-### Japanese Trench Parameters
-
-The default configuration uses realistic values for the Japan Trench subduction zone:
-
-- **Plate velocity**: 9 cm/year (Pacific plate subduction)
-- **Block spacing**: 2 km (crustal segment size)
-- **Seismogenic depth**: 10-30 km
-- **Friction coefficients**: μ_s = 0.6, μ_d = 0.4
-- **Spring stiffness**: 10^10 N/m
-
-### Gravity Sensor Configuration
-
-- **Sensor height**: 5 km above fault plane
-- **Array coverage**: Spans entire fault system
-- **Measurement**: Gravitational potential changes (J/kg)
-- **Expected magnitude**: 10^-8 to 10^-6 m²/s² for major events
-
-## Output Files
-
-### CSV Files
-
-1. **block_positions_time.csv**
-   - Columns: `time, block_id, x, y, z`
-   - Contains position of every block at each time step
-   - File size: ~hundreds of MB for 100-year simulation
-
-2. **sensor_potential_time.csv**
-   - Columns: `time, sensor_id, x_sensor, y_sensor, z_sensor, potential`
-   - Gravitational potential at each sensor over time
-   - File size: ~10-50 MB
-
-3. **earthquake_events.csv**
-   - Columns: `time, duration, magnitude, max_velocity, epicenter_i, epicenter_j, epicenter_x, epicenter_y`
-   - Detected seismic events with characteristics
-   - File size: Small (~KB to few MB)
-
-### Visualizations
-
-1. **gravity_potential_animation.mp4**
-   - Time-lapse of gravitational potential changes
-   - Yellow stars mark earthquake epicenters
-   - Duration: Proportional to simulation time
-
-2. **event_X_comparison.png**
-   - Before/during/after comparison for major events
-   - Shows spatial distribution of potential changes
-   - Multiple files for different events
-
-3. **magnitude_frequency.png**
-   - Histogram of earthquake magnitudes
-   - Tests Gutenberg-Richter relationship
-
-## Performance Considerations
-
-### Computational Requirements
-
-- **Memory**: ~2-4 GB RAM for 100×100 grid
-- **Runtime**: 
-  - ~10-30 minutes for 100 years (depends on CPU)
-  - Optimized with Numba JIT compilation
-  
-### Optimization Tips
-
-1. **Reduce grid size** for faster testing:
-   ```python
-   N_BLOCKS_X = 50
-   N_BLOCKS_Y = 50
-   ```
-
-2. **Increase sampling interval**:
-   ```python
-   DT_SAMPLE = 0.1  # years (less frequent sampling)
-   ```
-
-3. **Shorten simulation time**:
-   ```python
-   SIMULATION_TIME = 50.0  # years
-   ```
-
-4. **Disable animations** if FFmpeg is unavailable (comment out visualization calls in `main.py`)
-
-## Scientific Background
-
-### Burridge-Knopoff Model
-
-The Burridge-Knopoff model represents the Earth's crust as a grid of blocks connected by springs, sliding on a moving plate. Key features:
-
-- **Stick-slip dynamics**: Blocks stick due to friction, then slip when stress exceeds threshold
-- **Earthquake generation**: Slip events propagate through the grid
-- **Statistical properties**: Reproduces Gutenberg-Richter frequency-magnitude scaling
-
-### Rate-and-State Friction
-
-The simulation uses Dieterich-Ruina rate-and-state friction:
+The ODE state for N blocks is
 
 ```
-μ = μ_d + a·ln(v/v*) + b·ln(θv*/D_c)
-dθ/dt = 1 - vθ/D_c
+[x1, y1, z1, ..., xN, yN, zN,  vx1, vy1, vz1, ..., vxN, vyN, vzN,  θ1, ..., θN]
 ```
 
-Where:
-- μ: friction coefficient
-- v: slip velocity
-- θ: state variable
-- a, b: empirical parameters (b > a for instability)
-- D_c: characteristic slip distance
+(positions in m, velocities in m/s, rate-and-state variables θ in s): 7N values.
 
-### Gravitational Potential
+## Scientific background
 
-Sensors measure changes in gravitational potential:
+### Burridge-Knopoff model
+
+The Burridge-Knopoff model (Burridge & Knopoff, 1967) represents a fault as
+blocks connected to each other by coupling springs and to a slowly moving
+plate by loading ("leaf") springs, sliding with friction on a fixed surface.
+Stress builds up while the blocks stick; when the force on a block exceeds
+static friction it slips, possibly triggering its neighbours: an earthquake.
+With heterogeneity or velocity-weakening friction, such models produce broad,
+power-law-like event size distributions (Carlson & Langer, 1989).
+
+### Rate-and-state friction
+
+In the Dieterich-Ruina formulation, with slip velocity v and state θ,
 
 ```
-Φ(r) = -G Σ(m_i / |r - r_i|)
+μ = μ₀ + a·ln(v/v*) + b·ln(v*·θ/D_c)
+dθ/dt = 1 − v·θ/D_c                    (aging law)
 ```
 
-Where:
-- G: gravitational constant
-- m_i: block masses
-- r: sensor position
-- r_i: block positions
+At steady state θ = D_c/v and μ_ss = μ₀ + (a − b)·ln(v/v*): friction weakens
+with velocity when b > a, which allows stick-slip instabilities.
 
-## Validation
+### Gravitational potential
 
-Expected behaviors:
-- ✓ Periodic earthquake events (pseudo-periodic recurrence)
-- ✓ Gutenberg-Richter magnitude-frequency relation
-- ✓ Spatial clustering of aftershocks
-- ✓ Gravity changes of 10^-8 to 10^-6 m²/s² for large events
-- ✓ Energy conservation (within numerical tolerance)
+The sensors record
 
-## Troubleshooting
+```
+Φ(r) = −G Σᵢ mᵢ / |r − rᵢ|
+```
 
-### Common Issues
+and the outputs are ΔΦ = Φ(t) − Φ(0). The corresponding acceleration is
+g = −∇Φ = −G Σᵢ mᵢ (r − rᵢ)/|r − rᵢ|³, pointing towards the masses.
 
-1. **"Integration failed"**
-   - Solution: Reduce `MAX_STEP` in config.py
-   - Or increase tolerance (RTOL, ATOL)
+### Moment magnitude
 
-2. **"FFmpeg not found"**
-   - Solution: Install FFmpeg or disable animations
-
-3. **Out of memory**
-   - Solution: Reduce grid size or sampling frequency
-
-4. **Numba compilation warnings**
-   - Usually safe to ignore
-   - Ensure numpy arrays have correct dtypes
-
-### Getting Help
-
-For issues or questions:
-- Check parameter values in `config.py`
-- Review error messages in console output
-- Verify all dependencies are installed correctly
+A physically meaningful magnitude uses the seismic moment
+M₀ = μ_shear · A · s̄ (shear modulus, rupture area, mean slip):
+Mw = (2/3)(log₁₀ M₀ − 9.1), with M₀ in N·m.
 
 ## References
 
 1. Burridge, R., & Knopoff, L. (1967). Model and theoretical seismicity. *Bulletin of the Seismological Society of America*, 57(3), 341-371.
-
-2. Dieterich, J. H. (1979). Modeling of rock friction: 1. Experimental results and constitutive equations. *Journal of Geophysical Research*, 84(B5), 2161-2168.
-
-3. Ruina, A. (1983). Slip instability and state variable friction laws. *Journal of Geophysical Research*, 88(B12), 10359-10370.
-
-4. Scholz, C. H. (2002). *The Mechanics of Earthquakes and Faulting* (2nd ed.). Cambridge University Press.
+2. Carlson, J. M., & Langer, J. S. (1989). Mechanical model of an earthquake fault. *Physical Review A*, 40(11), 6470-6484.
+3. Dieterich, J. H. (1979). Modeling of rock friction: 1. Experimental results and constitutive equations. *Journal of Geophysical Research*, 84(B5), 2161-2168.
+4. Ruina, A. (1983). Slip instability and state variable friction laws. *Journal of Geophysical Research*, 88(B12), 10359-10370.
+5. Scholz, C. H. (2002). *The Mechanics of Earthquakes and Faulting* (2nd ed.). Cambridge University Press.
 
 ## License
 
 This project is provided for educational and research purposes.
 
-## Author
-
-Implemented with realistic Japanese Trench parameters for earthquake simulation research.
-
 ---
 
-**Note**: This is a simplified model for research and educational purposes. Real earthquake prediction requires significantly more complex models incorporating 3D geometry, heterogeneous material properties, fluid effects, and other factors.
+**Note**: this is a simplified model for research and education. Real
+earthquake forecasting requires far more complex models (3-D geometry,
+heterogeneous materials, fluids and more).

@@ -1,6 +1,15 @@
 """
-Gravity sensor array for measuring gravitational potential changes
-due to block displacements in the Burridge-Knopoff model
+Gravity sensors recording the change in gravitational potential caused by the
+motion of the blocks.
+
+Each block is a point mass m; the potential at a sensor at r is
+Phi(r) = -G sum_i m / |r - r_i|. The sensors report Phi(t) - Phi(0), the
+change relative to the reference grid.
+
+Note: the change (~1e-8 J/kg) is computed as the difference of two large
+totals (~-13 J/kg for the default grid), which loses about 9 of the 16
+significant digits of float64; computing the change directly from the
+displaced blocks would be both more accurate and faster.
 """
 
 import numpy as np
@@ -9,11 +18,12 @@ import config
 
 class GravitySensorArray:
     """
-    Array of gravity sensors measuring gravitational potential changes
+    Grid of gravity sensors above the fault (positions from
+    config.get_sensor_positions) and their reference potential.
     """
-    
+
     def __init__(self):
-        """Initialize sensor array"""
+        """Place the sensors and compute the potential of the reference block grid."""
         self.n_sensors = config.N_SENSORS
         self.sensor_positions = config.get_sensor_positions()
         
@@ -64,10 +74,15 @@ class GravitySensorArray:
     
     def get_sensor_grid_coordinates(self):
         """
-        Get sensor coordinates as 2D grid for visualization
-        
-        Returns:
-            x_grid, y_grid: 2D arrays of x and y coordinates
+        Sensor coordinates as 2-D grids for plotting.
+
+        Sensors are stored row by row (rows along y), so reshaping to
+        (N_SENSORS_Y, N_SENSORS_X) recovers the grid.
+
+        Returns
+        -------
+        x_grid, y_grid : ndarray, shape (N_SENSORS_Y, N_SENSORS_X)
+            Sensor x and y coordinates (m).
         """
         x_coords = self.sensor_positions[:, 0].reshape(config.N_SENSORS_Y, config.N_SENSORS_X)
         y_coords = self.sensor_positions[:, 1].reshape(config.N_SENSORS_Y, config.N_SENSORS_X)
@@ -98,7 +113,9 @@ def compute_potential_numba(block_positions, sensor_positions, block_mass, G):
     n_blocks = block_positions.shape[0]
     
     potentials = np.zeros(n_sensors)
-    
+
+    # Direct sum over all sensor-block pairs: O(n_sensors * n_blocks) square
+    # roots per call (1e6 for the default grid), recomputed at every sample
     for s_idx in range(n_sensors):
         sensor_pos = sensor_positions[s_idx]
         potential = 0.0
@@ -113,7 +130,8 @@ def compute_potential_numba(block_positions, sensor_positions, block_mass, G):
             
             distance = np.sqrt(dx*dx + dy*dy + dz*dz)
             
-            # Avoid division by zero
+            # Avoid division by zero (a sensor on top of a block; cannot happen
+            # while sensors are above the fault plane)
             if distance < 1e-6:
                 distance = 1e-6
             
@@ -128,9 +146,13 @@ def compute_potential_numba(block_positions, sensor_positions, block_mass, G):
 def compute_gravity_acceleration(block_positions, sensor_positions, block_mass, G):
     """
     Compute gravitational acceleration vector at sensor locations
-    
+    (not used by the simulation pipeline; plain Python loops, not compiled).
+
     This is useful for comparison with actual gravity measurements (gravimeters)
-    g = -∇Φ
+    g = -∇Φ = -G Σ m (r - r_i) / |r - r_i|^3, pointing towards the masses.
+
+    KNOWN ISSUE: the implementation adds +G m (r - r_i)/|r - r_i|^3, i.e. the
+    returned vectors point away from the masses (wrong sign).
     
     Args:
         block_positions: array of shape (n_blocks, 3)

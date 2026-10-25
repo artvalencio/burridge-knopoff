@@ -1,6 +1,14 @@
 """
-Main script to run Burridge-Knopoff earthquake simulation
-with gravity sensor array
+Runs the Burridge-Knopoff earthquake simulation with the gravity sensor array:
+builds the model and sensors from config.py, integrates, exports CSV files and
+creates the plots and animation.
+
+Usage (from the repository root, as src/ imports config from there):
+    python main.py
+
+Errors during export or visualisation are printed and the script continues;
+note that it then still ends with the "completed successfully" message and
+exit status 0.
 """
 
 import sys
@@ -13,7 +21,11 @@ from src.visualization import Visualizer
 import config
 
 def main():
-    """Main execution function"""
+    """Run the pipeline: initialise, simulate, export, visualise, summarise.
+
+    A failure during the simulation exits with status 1; failures during
+    export or visualisation are reported but do not stop the script.
+    """
     
     print("="*70)
     print("BURRIDGE-KNOPOFF EARTHQUAKE SIMULATION")
@@ -83,7 +95,7 @@ def main():
     print("\n" + "="*70)
     print("SIMULATION SUMMARY")
     print("="*70)
-    print(f"Simulation time: {times[-1]:.2f} years")
+    print(f"Simulation time: {times[-1]:.2f} years")  # (fails if no sample was produced)
     print(f"Time samples: {len(times)}")
     print(f"Earthquake events detected: {len(events)}")
     

@@ -1,6 +1,14 @@
 """
-Visualization module for creating animations and plots
-of gravitational potential changes and earthquake events
+Animations and plots of the gravitational potential changes and of the
+detected earthquakes, written to config.ANIMATION_DIR.
+
+Known issues:
+- the diverging colour scale (TwoSlopeNorm centred at 0) raises a ValueError
+  when the plotted values are all zero or all of one sign (e.g. the first
+  frame, or the window before an event);
+- the animation has one frame per sample (10,000 frames for the default run),
+  and with blit=True the title showing the time is not redrawn;
+- epicentre markers inherit the x/y swap of the event catalogue.
 """
 
 import numpy as np
@@ -53,12 +61,14 @@ class Visualizer:
         # Set up the figure
         fig, ax = plt.subplots(figsize=(12, 10))
         
-        # Determine color scale limits
+        # Colour limits from the 1st and 99th percentiles of all frames (robust
+        # to a few extreme values)
         all_potentials = np.concatenate([p.flatten() for p in potential_grids])
         vmin = np.percentile(all_potentials, 1)
         vmax = np.percentile(all_potentials, 99)
-        
-        # Create colormap with diverging colors centered at zero
+
+        # Diverging colours centred at zero (blue: decrease, red: increase).
+        # Requires vmin < 0 < vmax, otherwise TwoSlopeNorm raises ValueError.
         norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
         
         # Initial plot
@@ -96,7 +106,8 @@ class Visualizer:
             
             return [im] + event_markers
         
-        # Create animation
+        # One frame per sample. With blit=True only the returned artists are
+        # redrawn, so the title (time) set in update() does not change on screen.
         anim = animation.FuncAnimation(fig, update, frames=len(times),
                                       interval=50, blit=True, repeat=True)
         
@@ -130,7 +141,7 @@ class Visualizer:
         
         print(f"\nCreating before/after comparison for event at t={event_time:.3f} years...")
         
-        # Find time indices
+        # Samples closest to (event - window), the event start and (event + window)
         times_array = np.array(times)
         before_idx = np.argmin(np.abs(times_array - (event_time - time_window)))
         after_idx = np.argmin(np.abs(times_array - (event_time + time_window)))
@@ -147,7 +158,8 @@ class Visualizer:
         # Create figure with subplots
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         
-        # Determine common color scale
+        # Common colour scale for the three panels (same TwoSlopeNorm caveat:
+        # fails if all values share a sign)
         vmin = min(pot_before.min(), pot_event.min(), pot_after.min())
         vmax = max(pot_before.max(), pot_event.max(), pot_after.max())
         norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
@@ -197,8 +209,11 @@ class Visualizer:
         
     def plot_magnitude_frequency(self, events, output_filename='magnitude_frequency.png'):
         """
-        Plot magnitude-frequency distribution (Gutenberg-Richter law)
-        
+        Plot a histogram of the event magnitudes (linear counts). A
+        Gutenberg-Richter check would plot the cumulative number of events
+        with magnitude >= M on a log scale; note the magnitudes are currently
+        placeholders (see solver).
+
         Args:
             events: list of earthquake events
             output_filename: name of output file
