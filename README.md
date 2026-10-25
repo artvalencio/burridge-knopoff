@@ -54,14 +54,31 @@ vᵢ ≥ 0. The forces on it are
 
 | Force | Expression |
 |---|---|
-| coupling springs to its 4 neighbours (free edges) | k_c Σⱼ (uⱼ − uᵢ) |
+| coupling springs (free edges) | Σⱼ k_ij (uⱼ − uᵢ); by default k_ij = k_c for the 4 nearest neighbours |
 | loading ("leaf") spring to the plate | k_p (x_p(t) − uᵢ), x_p(t) = x_p(0) + v_p t |
-| friction | stuck: holds the block up to its strength F_s,i; slipping: F_d against the motion |
+| friction | stuck: holds the block up to its strength F_s,i; slipping: f_i(v) against the motion, by default F_d |
 
 The plate starts at x_p(0) = F_d/k_p, so every block starts at the dynamic
 friction level. Strengths are heterogeneous, F_s,i = F_d + (F_s − F_d)·U[1 − h, 1 + h],
 drawn with a seed. By default a block that has slipped heals with a new
 strength, never below the load it holds when it stops.
+
+**Optional physics.**
+
+- **Velocity-weakening friction** (`weakening_velocity_m_s` = v_w, `onset_drop` = s,
+  after Carlson & Langer, 1989). While a block slips, friction is
+
+      f_i(v) = F_d + (1 − s)(F_s,i − F_d) / (1 + v / v_w)
+
+  It drops by the fraction s of the strength excess when slip starts (that drop
+  is what lets slip begin), then weakens towards F_d as the block speeds up.
+  Very slow weakening behaves like constant friction at the onset level; very
+  fast weakening tends to the default F_d. Both limits are tested.
+- **Long-range stress transfer** (`interaction_range_blocks` = R,
+  `interaction_exponent` = p, default 3). Every pair of blocks within R
+  spacings is coupled with k_ij = k_c (L/r_ij)^p. With p = 3 this is the 1/r³
+  decay of static stress transfer in an elastic body. R = 1 is the classic
+  nearest-neighbour model; R = 3 couples 28 blocks, R = 5 couples 80.
 
 **Event-driven integration.** While all blocks are stuck, only the plate moves
 and every force grows at the rate k_p v_p. The time until the weakest block
@@ -93,7 +110,8 @@ unit; the documentation is `help(burridge_knopoff.SimulationConfig)`.
 |---|---|
 | grid | `n_blocks_x`, `n_blocks_y` (100, 100), `block_spacing_m` (2000), `seismogenic_thickness_m` (10 km), `rock_density_kg_m3` (2700) → block mass 1.08·10¹⁴ kg |
 | springs | derived from the geometry: coupling k_c = μ·H (3·10¹⁴ N/m), loading k_p = μ·L²/`loading_distance_m` (20 km → 6·10¹² N/m), so k_c/k_p = 50; `coupling_stiffness_n_m` / `loading_stiffness_n_m` override them |
-| friction | `static_friction_stress_pa` (10 MPa), `dynamic_friction_stress_pa` (7 MPa), `heterogeneity` (0.5), `redraw_thresholds` (True) |
+| friction | `static_friction_stress_pa` (10 MPa), `dynamic_friction_stress_pa` (7 MPa), `heterogeneity` (0.5), `redraw_thresholds` (True), `weakening_velocity_m_s` (None: off), `onset_drop` (0.2) |
+| coupling range | `interaction_range_blocks` (1: nearest neighbours), `interaction_exponent` (3) |
 | loading | `plate_velocity_m_per_year` (0.09), `shear_modulus_pa` (30 GPa, for the moment) |
 | sensors | `n_sensors_x`, `n_sensors_y` (10, 10), `sensor_height_m` (5000) |
 | schedule | `simulation_years` (100), `sample_interval_years` (0.01), `snapshot_interval_years` (1), `steps_per_period` (100), `spinup_years` (20, left out of the statistics), `seed` (0) |
@@ -106,7 +124,8 @@ about √(k_c/k_p) ≈ 7 blocks. `SimulationConfig.check_parameters()` warns whe
 configuration would produce no events in the simulated time.
 
 Command-line options override the grid, sensors, years, intervals, seed and
-spin-up (`--spinup`) for one run. Others: `--output DIR`, `--stream` (write series to disk while
+spin-up (`--spinup`) for one run, and turn on the optional physics:
+`--weakening V_W DROP` and `--range R`. Others: `--output DIR`, `--stream` (write series to disk while
 simulating), `--block-csv`, `--no-plots`, `--max-frames N`. Exit status: 0 on
 success, 1 if saving or plotting failed (the rest still runs), 2 for invalid
 parameters.
@@ -192,9 +211,10 @@ pytest -m slow      # time/memory budgets and long-run statistics
 
 ## Limitations
 
-- The model is the classic, simplified Burridge-Knopoff system: blocks with
-  nearest-neighbour springs and static/dynamic friction. It has no
-  rate-and-state friction, no long-range elasticity and no wave radiation.
+- The model is a simplified Burridge-Knopoff system: a single layer of blocks
+  with springs and static/dynamic (optionally velocity-weakening) friction.
+  Long-range coupling is truncated at a finite range. There is no
+  rate-and-state friction, and no wave radiation.
 - Parameters are mutually consistent, not calibrated to a particular fault.
 - Blocks are point masses for gravity; only their slip along x changes the
   potential.
