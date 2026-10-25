@@ -35,9 +35,8 @@ class SimulationConfig:
         heterogeneity: relative spread h of the strength excess (static minus
             dynamic) between blocks, uniform in [1 - h, 1 + h], 0 <= h < 1.
         redraw_thresholds: draw a new strength for a block after each slip
-            (annealed disorder) instead of keeping it fixed (quenched).
-        weakening_velocity_m_s: if set, sliding friction decays from static to
-            dynamic as F_d + (F_s - F_d) / (1 + v / v_w); None: constant F_d.
+            (annealed disorder; never below the force it holds when it stops)
+            instead of keeping it fixed (quenched).
     Loading and moment
         plate_velocity_m_per_year: plate rate.
         shear_modulus_pa: for the seismic moment M0 = shear modulus x area x slip.
@@ -65,7 +64,6 @@ class SimulationConfig:
     dynamic_friction_stress_pa: float = 7e6
     heterogeneity: float = 0.5
     redraw_thresholds: bool = True
-    weakening_velocity_m_s: float = None
 
     plate_velocity_m_per_year: float = 0.09
     shear_modulus_pa: float = 3e10
@@ -136,8 +134,6 @@ class SimulationConfig:
             raise ValueError('dynamic_friction_stress_pa must be in [0, static_friction_stress_pa)')
         if not 0 <= self.heterogeneity < 1:
             raise ValueError('heterogeneity must be in [0, 1), got %r' % self.heterogeneity)
-        if self.weakening_velocity_m_s is not None and not self.weakening_velocity_m_s > 0:
-            raise ValueError('weakening_velocity_m_s must be positive or None')
         if self.steps_per_period < 10:
             raise ValueError('steps_per_period must be at least 10, got %r' % self.steps_per_period)
         return self
