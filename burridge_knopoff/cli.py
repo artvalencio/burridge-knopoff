@@ -32,6 +32,10 @@ def _parser(defaults):
     p.add_argument('--seed', type=int, default=defaults.seed, help='random seed of the heterogeneity')
     p.add_argument('--spinup', type=float, default=defaults.spinup_years,
                    help='years left out of the magnitude statistics')
+    p.add_argument('--weakening', type=float, nargs=2, metavar=('V_W', 'DROP'), default=None,
+                   help='velocity-weakening friction: weakening velocity (m/s) and onset drop (0-1]')
+    p.add_argument('--range', type=int, default=defaults.interaction_range_blocks, dest='interaction_range',
+                   help='coupling range in blocks (1: nearest neighbours; >1: long-range 1/r^3)')
     p.add_argument('--output', default='output', help='output directory (data/ and plots/ inside)')
     p.add_argument('--stream', action='store_true', help='write series to disk while simulating (low memory)')
     p.add_argument('--block-csv', action='store_true', help='also write the block displacements as CSV')
@@ -72,7 +76,10 @@ def main(argv=None, config=None):
                                   n_sensors_y=args.sensors[1], simulation_years=args.years,
                                   sample_interval_years=args.sample_interval,
                                   snapshot_interval_years=args.snapshot_interval, seed=args.seed,
-                                  spinup_years=args.spinup).validate()
+                                  spinup_years=args.spinup, interaction_range_blocks=args.interaction_range,
+                                  **({} if args.weakening is None else
+                                     dict(weakening_velocity_m_s=args.weakening[0], onset_drop=args.weakening[1])))
+        cfg.validate()
     except ValueError as error:
         print('Invalid parameters: %s' % error, file=sys.stderr)
         return 2
@@ -80,6 +87,9 @@ def main(argv=None, config=None):
     status = 0
     print('[1/4] %d x %d blocks, %d x %d sensors, %g years (seed %d)'
           % (cfg.n_blocks_x, cfg.n_blocks_y, cfg.n_sensors_x, cfg.n_sensors_y, cfg.simulation_years, cfg.seed))
+    friction = ('Coulomb' if cfg.weakening_velocity_m_s is None else
+                'velocity weakening (v_w = %g m/s, onset drop %g)' % (cfg.weakening_velocity_m_s, cfg.onset_drop))
+    print('      friction: %s; coupling range: %d block(s)' % (friction, cfg.interaction_range_blocks))
     for warning in cfg.check_parameters():
         print('      warning: ' + warning)
     print('[2/4] Simulating...', flush=True)

@@ -73,3 +73,16 @@ def test_summary_reports_the_b_value(tmp_path, capsys):
 def test_summary_without_events_after_the_spinup(tmp_path, capsys):
     assert cli.main(TINY + ['--spinup', '20', '--output', str(tmp_path), '--no-plots']) == 0
     assert 'too few events after the spin-up' in capsys.readouterr().out
+
+
+def test_extension_options(tmp_path):
+    from burridge_knopoff.output import load_results
+    args = TINY + ['--weakening', '0.5', '0.3', '--range', '2', '--output', str(tmp_path), '--no-plots']
+    assert cli.main(args) == 0
+    cfg = load_results(str(tmp_path / 'data')).config
+    assert (cfg.weakening_velocity_m_s, cfg.onset_drop, cfg.interaction_range_blocks) == (0.5, 0.3, 2)
+
+
+def test_invalid_extension_option(capsys):
+    assert cli.main(TINY + ['--weakening', '0.5', '0', '--no-plots']) == 2
+    assert 'onset_drop' in capsys.readouterr().err

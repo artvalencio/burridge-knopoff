@@ -19,12 +19,16 @@ CONFIG = SimulationConfig(
     # loading = shear modulus x block area / loading distance (6e12 N/m); set
     # coupling_stiffness_n_m / loading_stiffness_n_m to override them
     loading_distance_m=20_000.0,        # depth at which the plate loads the fault
+    interaction_range_blocks=1,         # 1: nearest neighbours; >1: long-range k_c (L/r)^3 coupling
+    interaction_exponent=3.0,
 
     # friction (stress x block area = force) and its heterogeneity
     static_friction_stress_pa=10e6,
     dynamic_friction_stress_pa=7e6,
     heterogeneity=0.5,                  # strength excess spread: uniform in [1 - h, 1 + h]
     redraw_thresholds=True,
+    weakening_velocity_m_s=None,        # e.g. 0.5 for velocity-weakening friction (None: Coulomb)
+    onset_drop=0.2,                     # friction drop at slip onset (used with weakening)
 
     # loading and seismic moment
     plate_velocity_m_per_year=0.09,     # Pacific plate at the Japan Trench, ~9 cm/year
