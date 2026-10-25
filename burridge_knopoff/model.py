@@ -128,9 +128,16 @@ def _activate(i, u, active, slipped, order, u_start, n_order, act, n_act):
 
 
 @njit(cache=True)
-def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol, kw, plate, vp, dt,
+def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol, kw, ksum, plate, vp, dt,
                  hypocentre, max_steps, active, slipped, act, moved, acc, disp, order, u_start):
     """Integrates one event in place (u, v, force).
+
+    Forces: with the nearest-neighbour stencil each force is recomputed from the
+    displacements when needed (4 terms). With longer ranges (incremental mode),
+    force[] is updated as blocks move: a block moving by du changes its own force
+    by -ksum[i] du (ksum = k_p + its coupling stiffnesses) and the force of each
+    coupled block j by k_ij du; the plate motion is added as one common shift.
+    Every lookup is then O(1) instead of O(stencil).
 
     Work arrays: active, slipped (all False on entry and on return), act, moved,
     acc, disp, u_start (size n). On return order[:n_slipped] lists the slipped
@@ -140,6 +147,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
     """
     n = u.shape[0]
     n_stencil = drow.shape[0]
+    incremental = n_stencil > 4
     plate_start = plate
     n_order, n_act = _activate(hypocentre, u, active, slipped, order, u_start, 0, act, 0)
     sum_u = u.sum()
@@ -152,7 +160,8 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
         if n_act == 0:
             # quiet: did the (tiny) plate motion during the event push any other block over?
             for i in range(n):
-                if _force(i, u, plate, nx, ny, kp, drow, dcol, kw) > static[i]:
+                f_i = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
+                if f_i > static[i]:
                     n_order, n_act = _activate(i, u, active, slipped, order, u_start, n_order, act, n_act)
             if n_act == 0:
                 completed = True
@@ -160,8 +169,8 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
         # velocity Verlet: a(t), then u(t + dt), then a(t + dt) and v(t + dt)
         for k in range(n_act):
             i = act[k]
-            acc[i] = (_force(i, u, plate, nx, ny, kp, drow, dcol, kw)
-                      - _friction(v[i], static[i], fd, vw, keep)) / mass
+            f_i = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
+            acc[i] = (f_i - _friction(v[i], static[i], fd, vw, keep)) / mass
         sum_before = sum_u
         for k in range(n_act):
             i = act[k]
@@ -172,6 +181,21 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
             sum_u += du
             disp[i] = du
             moved[k] = i
+        if incremental:
+            # forces are linear in u: apply every displacement of this step
+            for k in range(n_act):
+                i = moved[k]
+                du = disp[i]
+                if du == 0.0:
+                    continue
+                force[i] -= ksum[i] * du
+                row = i // nx
+                col = i - row * nx
+                for s in range(n_stencil):
+                    r = row + drow[s]
+                    c = col + dcol[s]
+                    if 0 <= r < ny and 0 <= c < nx:
+                        force[r * nx + c] += kw[s] * du
         # plate work during the step: k_p v_p dt sum_i (x_p - u_i), at mid-step
         work += kp * vp * dt * (n * (plate + 0.5 * vp * dt) - 0.5 * (sum_before + sum_u))
         plate += vp * dt
@@ -181,7 +205,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
             i = act[k]
             f_old = _friction(v[i], static[i], fd, vw, keep)
             v_pred = v[i] + acc[i] * dt  # velocity-dependent friction at the end of the step
-            f_new = _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
+            f_new = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
             fric_new = _friction(v_pred, static[i], fd, vw, keep)
             v_new = v[i] + 0.5 * (acc[i] + (f_new - fric_new) / mass) * dt
             # friction work: mean friction over the step times the distance slid
@@ -208,11 +232,15 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
                 c = col + dcol[s]
                 if 0 <= r < ny and 0 <= c < nx:
                     j = r * nx + c
-                    if not active[j] and _force(j, u, plate, nx, ny, kp, drow, dcol, kw) > static[j]:
+                    if active[j]:
+                        continue
+                    f_j = force[j] + kp * (plate - plate_start) if incremental else _force(j, u, plate, nx, ny, kp, drow, dcol, kw)
+                    if f_j > static[j]:
                         n_order, n_act = _activate(j, u, active, slipped, order, u_start, n_order, act, n_act)
         steps += 1
     # update the maintained forces: the plate moved for everyone, and the slipped
-    # blocks and the blocks coupled to them are recomputed exactly
+    # blocks and the blocks coupled to them are recomputed exactly (this also
+    # removes any rounding accumulated by the incremental updates)
     shift = kp * (plate - plate_start)
     for i in range(n):
         force[i] += shift
@@ -267,6 +295,8 @@ class Model:
         # coupled offsets and their stiffnesses k_c (L / r)^p
         self.drow, self.dcol, weight = grid.interaction_stencil(config)
         self.kw = self.kc * weight
+        # k_p + the coupling stiffnesses of each block (fewer partners at the edges)
+        self.ksum = self.kp + self._coupling_degree()
         # sliding friction: v_w <= 0 encodes Coulomb friction for the kernel
         self.vw = config.weakening_velocity_m_s if config.weakening_velocity_m_s is not None else 0.0
         self.keep = 1.0 - config.onset_drop
@@ -296,6 +326,13 @@ class Model:
             target = (slice(max(0, -dr), ny - max(0, dr)), slice(max(0, -dc), nx - max(0, dc)))
             source = (slice(max(0, dr), ny + min(0, dr)), slice(max(0, dc), nx + min(0, dc)))
             yield k, target, source
+
+    def _coupling_degree(self):
+        # sum of the coupling stiffnesses of each block's partners inside the grid
+        g = np.zeros((self.config.n_blocks_y, self.config.n_blocks_x))
+        for k, target, source in self._pairs(g):
+            g[target] += k
+        return g.ravel()
 
     def coupling_force(self, u):
         """Force from the coupling springs on each block (N), for displacements u."""
@@ -340,7 +377,7 @@ class Model:
         w = self._work
         plate, steps, n_slipped, peak, dissipated, work, completed = _slip_kernel(
             self.u, self.v, self.current_force, self.static_force, self.fd, self.vw, self.keep, self.kp,
-            self.mass, self.config.n_blocks_x, self.config.n_blocks_y, self.drow, self.dcol, self.kw,
+            self.mass, self.config.n_blocks_x, self.config.n_blocks_y, self.drow, self.dcol, self.kw, self.ksum,
             self.plate_m, self.vp, self.dt, hypocentre, self.max_event_steps, w['active'], w['slipped'],
             w['act'], w['moved'], w['acc'], w['disp'], w['order'], w['u_start'])
         if not completed:
