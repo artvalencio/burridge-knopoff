@@ -49,6 +49,9 @@ class SimulationConfig:
         snapshot_interval_years: interval of the stored block displacement field.
         steps_per_period: time steps per period of the fastest oscillation
             during slip (accuracy of the dynamics).
+        spinup_years: events starting earlier are left out of the statistics
+            (analysis.gutenberg_richter): every block starts at the same stress,
+            so the first years are dominated by system-wide events.
         seed: random seed of the heterogeneity (results are reproducible).
     """
     n_blocks_x: int = 100
@@ -76,6 +79,7 @@ class SimulationConfig:
     sample_interval_years: float = 0.01
     snapshot_interval_years: float = 1.0
     steps_per_period: int = 100
+    spinup_years: float = 20.0
     seed: int = 0
 
     # ---- derived quantities -------------------------------------------------
@@ -134,6 +138,8 @@ class SimulationConfig:
             raise ValueError('dynamic_friction_stress_pa must be in [0, static_friction_stress_pa)')
         if not 0 <= self.heterogeneity < 1:
             raise ValueError('heterogeneity must be in [0, 1), got %r' % self.heterogeneity)
+        if not self.spinup_years >= 0:
+            raise ValueError('spinup_years must be >= 0, got %r' % self.spinup_years)
         if self.steps_per_period < 10:
             raise ValueError('steps_per_period must be at least 10, got %r' % self.steps_per_period)
         return self
@@ -145,6 +151,9 @@ class SimulationConfig:
         if recurrence > self.simulation_years:
             warnings.append('single-block recurrence time %.3g years exceeds the simulated %.3g years: '
                             'few or no events expected' % (recurrence, self.simulation_years))
+        if self.spinup_years >= self.simulation_years:
+            warnings.append('spin-up of %g years covers the whole simulation: no events for the statistics'
+                            % self.spinup_years)
         if self.sample_interval_years > self.simulation_years:
             warnings.append('sample interval longer than the simulation')
         return warnings

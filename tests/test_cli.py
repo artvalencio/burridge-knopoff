@@ -60,3 +60,16 @@ def test_main_script_runs_from_anywhere(tmp_path):
     proc = subprocess.run([sys.executable, os.path.join(REPO, 'main.py'), '--help'], cwd=tmp_path,
                           capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0 and '--years' in proc.stdout
+
+
+def test_summary_reports_the_b_value(tmp_path, capsys):
+    args = ['--nx', '15', '--ny', '15', '--sensors', '2', '2', '--years', '60', '--sample-interval', '1',
+            '--spinup', '10', '--output', str(tmp_path), '--no-plots']
+    assert cli.main(args) == 0
+    out = capsys.readouterr().out
+    assert 'b = ' in out and 'spin-up 10' in out
+
+
+def test_summary_without_events_after_the_spinup(tmp_path, capsys):
+    assert cli.main(TINY + ['--spinup', '20', '--output', str(tmp_path), '--no-plots']) == 0
+    assert 'too few events after the spin-up' in capsys.readouterr().out

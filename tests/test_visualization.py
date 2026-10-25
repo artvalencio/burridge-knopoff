@@ -13,7 +13,7 @@ from burridge_knopoff.simulation import run
 @pytest.fixture(scope='module')
 def result():
     return run(SimulationConfig(n_blocks_x=6, n_blocks_y=4, n_sensors_x=3, n_sensors_y=2,
-                                simulation_years=20.0, sample_interval_years=0.1, seed=1))
+                                simulation_years=20.0, sample_interval_years=0.1, seed=1, spinup_years=2.0))
 
 
 @pytest.fixture(scope='module')
@@ -69,7 +69,7 @@ def test_event_comparison_marks_the_hypocentre(result):
 
 def test_magnitude_frequency_is_cumulative(result):
     fig = vis.magnitude_frequency(result, path=None)
-    m = np.array([e.magnitude for e in result.events])
+    m = np.array([e.magnitude for e in result.events if e.start_years >= 2.0])  # after the spin-up
     line = fig.axes[0].get_lines()[0]
     mags, counts = line.get_data()
     assert counts[0] == len(m) and np.all(np.diff(counts) <= 0)
@@ -81,3 +81,13 @@ def test_create_all_writes_every_plot(result, tmp_path):
     names = sorted(os.path.basename(p) for p in paths)
     assert names == ['event_1_comparison.png', 'event_2_comparison.png', 'gravity_potential_animation.gif',
                      'magnitude_frequency.png']
+
+
+def test_magnitude_frequency_shows_the_fitted_law():
+    res = run(SimulationConfig(n_blocks_x=20, n_blocks_y=20, n_sensors_x=2, n_sensors_y=2,
+                               simulation_years=60.0, sample_interval_years=1.0, spinup_years=10.0))
+    fig = vis.magnitude_frequency(res, path=None)
+    labels = [line.get_label() for line in fig.axes[0].get_lines()]
+    assert any(l.startswith('b = ') for l in labels) and any(l.startswith('Mc = ') for l in labels)
+    assert 'after 10' in fig.axes[0].get_title()
+    vis.plt.close(fig)

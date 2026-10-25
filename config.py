@@ -39,5 +39,6 @@ CONFIG = SimulationConfig(
     sample_interval_years=0.01,         # sensor time-series
     snapshot_interval_years=1.0,        # stored block displacement fields
     steps_per_period=100,               # accuracy of the slip dynamics
+    spinup_years=20.0,                  # left out of the magnitude statistics
     seed=0,
 )

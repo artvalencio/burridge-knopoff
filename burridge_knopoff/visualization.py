@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 
-from . import grid
+from . import analysis, grid
 
 CMAP = 'RdBu_r'
 LABEL = 'Gravitational potential change (J/kg)'
@@ -122,18 +122,28 @@ def event_comparison(result, event_index, path):
 
 
 def magnitude_frequency(result, path):
-    """Cumulative number of events with magnitude >= M (log scale), the
-    Gutenberg-Richter representation."""
-    m = np.sort([e.magnitude for e in result.events])
+    """Cumulative number of events with magnitude >= M (log scale) after the
+    spin-up, with the magnitude of completeness and the maximum-likelihood
+    Gutenberg-Richter fit (analysis.gutenberg_richter)."""
+    stats = analysis.gutenberg_richter(result)
+    spinup = stats['spinup_years']
+    m = np.sort([e.magnitude for e in result.events if e.start_years >= spinup])
     fig, ax = plt.subplots(figsize=(8, 5))
     if len(m):
-        ax.plot(m, len(m) - np.arange(len(m)), '.-')  # N(>= m[k]) = n - k
+        ax.plot(m, len(m) - np.arange(len(m)), '.-', label='events')  # N(>= m[k]) = n - k
         ax.set_yscale('log')
     else:
         ax.text(0.5, 0.5, 'no events', ha='center', va='center', transform=ax.transAxes)
+    if stats['b'] is not None:
+        est, mc = stats['b'], stats['mc']
+        line = np.linspace(mc, m.max(), 50)
+        ax.plot(line, np.count_nonzero(m >= mc) * 10 ** (-est.b * (line - mc)), '--',
+                label='b = %.2f ± %.2f (Mw ≥ Mc)' % (est.b, est.sigma))
+        ax.axvline(mc, color='grey', linestyle=':', label='Mc = %.1f' % mc)
+        ax.legend()
     ax.set_xlabel('Moment magnitude Mw')
     ax.set_ylabel('Number of events with magnitude >= Mw')
-    ax.set_title('Magnitude-frequency distribution (%d events)' % len(m))
+    ax.set_title('Magnitude-frequency distribution (%d events after %g years of spin-up)' % (len(m), spinup))
     ax.grid(True, which='both', alpha=0.3)
     if path is None:
         return fig

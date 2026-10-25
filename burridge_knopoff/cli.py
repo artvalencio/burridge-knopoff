@@ -13,7 +13,7 @@ import os
 import sys
 import time
 
-from . import output, visualization
+from . import analysis, output, visualization
 from .config import SimulationConfig
 from .simulation import run
 
@@ -30,6 +30,8 @@ def _parser(defaults):
     p.add_argument('--snapshot-interval', type=float, default=defaults.snapshot_interval_years,
                    help='interval of stored block displacement fields (years)')
     p.add_argument('--seed', type=int, default=defaults.seed, help='random seed of the heterogeneity')
+    p.add_argument('--spinup', type=float, default=defaults.spinup_years,
+                   help='years left out of the magnitude statistics')
     p.add_argument('--output', default='output', help='output directory (data/ and plots/ inside)')
     p.add_argument('--stream', action='store_true', help='write series to disk while simulating (low memory)')
     p.add_argument('--block-csv', action='store_true', help='also write the block displacements as CSV')
@@ -50,6 +52,15 @@ def _summary(result):
         lines += ['  Mw %.2f to %.2f' % (min(mags), max(mags)),
                   '  largest: Mw %.2f at t = %.2f years, hypocentre (%.1f, %.1f) km, %d blocks slipped'
                   % (big.magnitude, big.start_years, x / 1000, y / 1000, big.n_slipped)]
+    stats = analysis.gutenberg_richter(result)
+    if stats['b'] is None:
+        lines.append('  b-value: too few events after the spin-up (%g years)' % stats['spinup_years'])
+    else:
+        est = stats['b']
+        lines.append('  b = %.2f +/- %.2f for Mw >= Mc = %.1f (%d events after the spin-up %g years)'
+                     % (est.b, est.sigma, stats['mc'], est.n, stats['spinup_years']))
+        lines.append('  local b (1-unit windows): ' + ', '.join('%.1f-%.1f: %.2f' % (w.mc, w.upper, w.b)
+                                                               for w in stats['local']))
     return '\n'.join(lines)
 
 
@@ -60,7 +71,8 @@ def main(argv=None, config=None):
         cfg = dataclasses.replace(defaults, n_blocks_x=args.nx, n_blocks_y=args.ny, n_sensors_x=args.sensors[0],
                                   n_sensors_y=args.sensors[1], simulation_years=args.years,
                                   sample_interval_years=args.sample_interval,
-                                  snapshot_interval_years=args.snapshot_interval, seed=args.seed).validate()
+                                  snapshot_interval_years=args.snapshot_interval, seed=args.seed,
+                                  spinup_years=args.spinup).validate()
     except ValueError as error:
         print('Invalid parameters: %s' % error, file=sys.stderr)
         return 2
