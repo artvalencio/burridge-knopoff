@@ -136,3 +136,24 @@ def run(config, progress=None, store_dir=None):
     return SimulationResult(config=config, times_years=times, potentials=potentials, snapshot_years=snap_times,
                             displacements=displacements, events=event_list, final_displacement=model.u.copy(),
                             dissipated_energy_j=dissipated)
+
+
+def _run_seed(args):
+    config, seed = args
+    return run(dataclasses.replace(config, seed=int(seed)))
+
+
+def run_ensemble(config, seeds, n_jobs=1):
+    """Runs `config` once per seed and returns the results in seed order.
+
+    n_jobs > 1 runs the simulations in that many worker processes (-1: one per
+    CPU). Each run depends only on its own seed, so the results do not depend
+    on n_jobs. Results are held in memory: use small snapshot rates for big
+    ensembles.
+    """
+    tasks = [(config, seed) for seed in seeds]
+    if n_jobs == 1:
+        return [_run_seed(t) for t in tasks]
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=None if n_jobs < 0 else n_jobs) as pool:
+        return list(pool.map(_run_seed, tasks))
