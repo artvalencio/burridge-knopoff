@@ -1,105 +1,45 @@
 """
-Configuration file for Burridge-Knopoff earthquake simulation
-Physical parameters based on Japanese Trench characteristics
+Default parameters for `python main.py`. Edit the values below; command-line
+options (python main.py --help) override some of them for a single run.
+
+Units are in the names (SI; schedule in years). The meaning of every field is
+documented in burridge_knopoff/config.py (help(SimulationConfig)).
 """
+from burridge_knopoff.config import SimulationConfig
 
-import numpy as np
+CONFIG = SimulationConfig(
+    # grid: 100 x 100 blocks, 2 km apart (a 200 km x 200 km fault patch)
+    n_blocks_x=100,
+    n_blocks_y=100,
+    block_spacing_m=2000.0,
+    seismogenic_thickness_m=10_000.0,   # with the density, gives the block mass
+    rock_density_kg_m3=2700.0,
 
-# Grid dimensions
-N_BLOCKS_X = 100  # Number of blocks in x-direction
-N_BLOCKS_Y = 100  # Number of blocks in y-direction
-N_BLOCKS = N_BLOCKS_X * N_BLOCKS_Y  # Total blocks
+    # springs, derived from the geometry: coupling = shear modulus x thickness (3e14 N/m),
+    # loading = shear modulus x block area / loading distance (6e12 N/m); set
+    # coupling_stiffness_n_m / loading_stiffness_n_m to override them
+    loading_distance_m=20_000.0,        # depth at which the plate loads the fault
 
-# Sensor array
-N_SENSORS_X = 10  # Sensors in x-direction
-N_SENSORS_Y = 10  # Sensors in y-direction
-N_SENSORS = N_SENSORS_X * N_SENSORS_Y  # Total sensors
-SENSOR_HEIGHT = 5.0  # km above fault plane
+    # friction (stress x block area = force) and its heterogeneity
+    static_friction_stress_pa=10e6,
+    dynamic_friction_stress_pa=7e6,
+    heterogeneity=0.5,                  # strength excess spread: uniform in [1 - h, 1 + h]
+    redraw_thresholds=True,
 
-# Simulation time parameters
-SIMULATION_TIME = 100.0  # years (total simulation time)
-DT_SAMPLE = 0.01  # years (data sampling interval)
-T_INITIAL_EQUILIBRATION = 10.0  # years (initial equilibration period)
+    # loading and seismic moment
+    plate_velocity_m_per_year=0.09,     # Pacific plate at the Japan Trench, ~9 cm/year
+    shear_modulus_pa=3e10,
 
-# Physical parameters (SI units)
-BLOCK_MASS = 1e12  # kg (mass of each block, ~crustal segment)
-BLOCK_SPACING = 2000.0  # meters (spacing between blocks, 2 km)
-SPRING_K_HORIZONTAL = 1e10  # N/m (spring stiffness horizontal)
-SPRING_K_VERTICAL = 1e10  # N/m (spring stiffness vertical)
+    # gravity sensors, centred over the blocks
+    n_sensors_x=10,
+    n_sensors_y=10,
+    sensor_height_m=5000.0,
 
-# Friction parameters (rate-and-state friction)
-MU_STATIC = 0.6  # Static friction coefficient
-MU_DYNAMIC = 0.4  # Dynamic friction coefficient
-V_CHARACTERISTIC = 1e-6  # m/s (characteristic velocity for friction)
-A_FRICTION = 0.01  # Rate-and-state parameter a
-B_FRICTION = 0.015  # Rate-and-state parameter b (b > a for instability)
-DC = 0.01  # m (characteristic slip distance)
-
-# Plate motion
-PLATE_VELOCITY = 0.09  # m/year (Pacific plate subduction rate ~9 cm/year)
-PLATE_VELOCITY_SI = PLATE_VELOCITY / (365.25 * 24 * 3600)  # m/s
-
-# Gravitational constant
-G = 6.67430e-11  # m^3 kg^-1 s^-2
-
-# Damping coefficient (small damping for numerical stability)
-DAMPING = 1e5  # kg/s
-
-# Numerical solver parameters
-RTOL = 1e-6  # Relative tolerance
-ATOL = 1e-8  # Absolute tolerance
-MAX_STEP = 0.01 * 365.25 * 24 * 3600  # Maximum time step in seconds (0.01 year)
-
-# Event detection thresholds
-VELOCITY_THRESHOLD = 1e-3  # m/s (threshold for earthquake detection)
-MIN_EVENT_DURATION = 1.0  # seconds (minimum duration to count as event)
-
-# Output settings
-OUTPUT_DIR = 'output'
-CSV_DIR = 'output/csv'
-ANIMATION_DIR = 'output/animations'
-
-# Derived parameters
-BLOCK_AREA = BLOCK_SPACING ** 2  # m^2
-NORMAL_FORCE = BLOCK_MASS * 9.81  # N (normal force per block)
-
-# Convert time units
-SECONDS_PER_YEAR = 365.25 * 24 * 3600
-
-def get_sensor_positions():
-    """
-    Calculate fixed positions of gravity sensors.
-    Returns positions in meters as (x, y, z) coordinates.
-    """
-    x_range = N_BLOCKS_X * BLOCK_SPACING
-    y_range = N_BLOCKS_Y * BLOCK_SPACING
-    
-    # Create grid of sensor positions
-    x_sensors = np.linspace(BLOCK_SPACING/2, x_range - BLOCK_SPACING/2, N_SENSORS_X)
-    y_sensors = np.linspace(BLOCK_SPACING/2, y_range - BLOCK_SPACING/2, N_SENSORS_Y)
-    
-    xx, yy = np.meshgrid(x_sensors, y_sensors)
-    
-    # All sensors at height h above the fault (z = 0 for blocks)
-    z_sensors = np.full_like(xx, SENSOR_HEIGHT * 1000)  # Convert km to m
-    
-    positions = np.stack([xx.flatten(), yy.flatten(), z_sensors.flatten()], axis=1)
-    
-    return positions
-
-def get_block_positions():
-    """
-    Calculate initial positions of blocks in the grid.
-    Returns positions in meters as (x, y, z) coordinates.
-    """
-    x_blocks = np.linspace(0, (N_BLOCKS_X - 1) * BLOCK_SPACING, N_BLOCKS_X)
-    y_blocks = np.linspace(0, (N_BLOCKS_Y - 1) * BLOCK_SPACING, N_BLOCKS_Y)
-    
-    xx, yy = np.meshgrid(x_blocks, y_blocks)
-    
-    # Initial z = 0 (fault plane)
-    zz = np.zeros_like(xx)
-    
-    positions = np.stack([xx.flatten(), yy.flatten(), zz.flatten()], axis=1)
-    
-    return positions
+    # schedule
+    simulation_years=100.0,
+    sample_interval_years=0.01,         # sensor time-series
+    snapshot_interval_years=1.0,        # stored block displacement fields
+    steps_per_period=100,               # accuracy of the slip dynamics
+    spinup_years=20.0,                  # left out of the magnitude statistics
+    seed=0,
+)

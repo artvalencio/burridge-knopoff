@@ -50,3 +50,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local planning notes (not published)
+IMPROVEMENT_PLAN.md
+.pytest_cache/
+!docs/*.png
