@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "burridge-knopoff"
+version = "2.0.0.dev0"
+description = "Burridge-Knopoff earthquake simulation with a gravity sensor array"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22", "numba>=0.56", "matplotlib>=3.5"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+burridge-knopoff = "burridge_knopoff.cli:main"
+
+[tool.setuptools]
+packages = ["burridge_knopoff"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["slow: long simulations and time/memory budgets (run with -m slow)"]
+addopts = "-m 'not slow'"
