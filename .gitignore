@@ -54,3 +54,4 @@ Thumbs.db
 # Local planning notes (not published)
 IMPROVEMENT_PLAN.md
 .pytest_cache/
+!docs/*.png
