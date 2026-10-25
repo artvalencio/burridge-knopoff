@@ -36,12 +36,23 @@ class SimulationConfig:
             default 20 km gives 50, i.e. ~7 blocks. Much smaller ratios cut the
             magnitude distribution off early (see analysis).
         The effective values are k_coupling_n_m and k_loading_n_m.
+        interaction_range_blocks: blocks within this distance (in spacings) are
+            coupled, with stiffness k_c (L / r)^interaction_exponent. 1 (default):
+            the four nearest neighbours only (classic model). Larger values
+            approximate the long-range static stress transfer of an elastic
+            body, which decays as 1 / r^3.
     Friction (forces = stress x block area)
         static_friction_stress_pa: mean strength. A stuck block starts slipping
             when the force on it exceeds its strength.
         dynamic_friction_stress_pa: friction while slipping (below static).
         heterogeneity: relative spread h of the strength excess (static minus
             dynamic) between blocks, uniform in [1 - h, 1 + h], 0 <= h < 1.
+        weakening_velocity_m_s, onset_drop: velocity-weakening friction
+            (after Carlson & Langer, 1989). While a block slips, friction is
+            F_d + (1 - onset_drop) (F_s,i - F_d) / (1 + v / weakening_velocity_m_s):
+            it drops by onset_drop of the strength excess when slip starts (so
+            that slip can start) and then weakens towards F_d as v grows.
+            weakening_velocity_m_s None (default): constant friction F_d.
         redraw_thresholds: draw a new strength for a block after each slip
             (annealed disorder; never below the force it holds when it stops)
             instead of keeping it fixed (quenched).
@@ -71,10 +82,14 @@ class SimulationConfig:
     coupling_stiffness_n_m: float = None
     loading_stiffness_n_m: float = None
     loading_distance_m: float = 20_000.0
+    interaction_range_blocks: int = 1
+    interaction_exponent: float = 3.0
 
     static_friction_stress_pa: float = 10e6
     dynamic_friction_stress_pa: float = 7e6
     heterogeneity: float = 0.5
+    weakening_velocity_m_s: float = None
+    onset_drop: float = 0.2
     redraw_thresholds: bool = True
 
     plate_velocity_m_per_year: float = 0.09
@@ -137,8 +152,10 @@ class SimulationConfig:
     @property
     def slip_time_step_s(self):
         """Time step during slip: a fraction of the period of the fastest oscillation
-        (a block held by its loading spring and four coupling springs)."""
-        omega = math.sqrt((self.k_loading_n_m + 4 * self.k_coupling_n_m) / self.block_mass_kg)
+        (a block held by its loading spring and all its coupling springs)."""
+        from .grid import interaction_stencil
+        weights = interaction_stencil(self)[2]
+        omega = math.sqrt((self.k_loading_n_m + self.k_coupling_n_m * weights.sum()) / self.block_mass_kg)
         return 2 * math.pi / omega / self.steps_per_period
 
     def single_block_recurrence_years(self):
@@ -164,6 +181,15 @@ class SimulationConfig:
             raise ValueError('dynamic_friction_stress_pa must be in [0, static_friction_stress_pa)')
         if not 0 <= self.heterogeneity < 1:
             raise ValueError('heterogeneity must be in [0, 1), got %r' % self.heterogeneity)
+        if not (isinstance(self.interaction_range_blocks, int) and self.interaction_range_blocks >= 1):
+            raise ValueError('interaction_range_blocks must be an integer >= 1, got %r' % self.interaction_range_blocks)
+        if not self.interaction_exponent > 0:
+            raise ValueError('interaction_exponent must be positive, got %r' % self.interaction_exponent)
+        if self.weakening_velocity_m_s is not None:
+            if not self.weakening_velocity_m_s > 0:
+                raise ValueError('weakening_velocity_m_s must be positive or None, got %r' % self.weakening_velocity_m_s)
+            if not 0 < self.onset_drop <= 1:
+                raise ValueError('onset_drop must be in (0, 1] with velocity weakening, got %r' % self.onset_drop)
         if not self.spinup_years >= 0:
             raise ValueError('spinup_years must be >= 0, got %r' % self.spinup_years)
         if self.steps_per_period < 10:
