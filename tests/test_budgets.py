@@ -8,6 +8,7 @@ import tracemalloc
 import numpy as np
 import pytest
 
+from burridge_knopoff import analysis
 from burridge_knopoff.config import SimulationConfig
 from burridge_knopoff.simulation import run
 
@@ -21,7 +22,7 @@ def compiled():
 
 def test_default_run_time():
     start = time.perf_counter()
-    run(SimulationConfig())  # 100 x 100 blocks, 100 years: ~12 s measured
+    run(SimulationConfig())  # 100 x 100 blocks, 100 years: ~10 s measured
     assert time.perf_counter() - start < 40
 
 
@@ -42,11 +43,19 @@ def test_streamed_run_memory(tmp_path):
     assert peak < 30
 
 
-def test_heterogeneous_fault_produces_a_broad_magnitude_distribution():
-    res = run(SimulationConfig(n_blocks_x=50, n_blocks_y=50, simulation_years=200.0))
-    moments = np.array([e.moment_n_m for e in res.events])
-    magnitudes = np.array([e.magnitude for e in res.events])
-    assert moments.max() / moments.min() > 1e3  # more than three decades of moment
-    # fewer large events than small ones (Gutenberg-Richter-like decay)
-    counts = np.histogram(magnitudes, bins=np.arange(np.floor(magnitudes.min()), magnitudes.max() + 0.5, 0.5))[0]
-    assert counts[0] > 10 * counts[-1]
+def local_slopes(config):
+    stats = analysis.gutenberg_richter(run(config))
+    return stats, [(w.mc - stats['mc'], w.b) for w in stats['local']]
+
+
+def test_geometric_springs_give_a_power_law_over_two_magnitude_units():
+    # default 100 x 100 x 100 years: b ~ 0.55-0.8 from Mc up to Mc + 3 (measured)
+    stats, slopes = local_slopes(SimulationConfig())
+    assert 0.5 < stats['b'].b < 1.0
+    assert all(b < 1.0 for offset, b in slopes if offset <= 2.0)
+
+
+def test_weak_coupling_cuts_the_distribution_off_early():
+    # the version-2.0 springs (k_c / k_p = 2.5): b jumps above 1.4 within one unit of Mc
+    stats, slopes = local_slopes(SimulationConfig(coupling_stiffness_n_m=6e13, loading_stiffness_n_m=2.4e13))
+    assert any(b > 1.4 for offset, b in slopes if offset <= 1.0)

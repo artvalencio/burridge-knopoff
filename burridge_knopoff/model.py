@@ -204,8 +204,8 @@ class Model:
         n = config.n_blocks
         self.u = np.zeros(n)
         self.v = np.zeros(n)
-        self.kc = config.coupling_stiffness_n_m
-        self.kp = config.loading_stiffness_n_m
+        self.kc = config.k_coupling_n_m
+        self.kp = config.k_loading_n_m
         self.fd = config.dynamic_force_n
         self.mass = config.block_mass_kg
         self.vp = config.plate_velocity_m_s

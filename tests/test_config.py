@@ -18,7 +18,7 @@ def test_defaults_are_valid_and_physical():
 
 def test_default_parameters_produce_events_within_the_simulation():
     cfg = SimulationConfig()
-    assert cfg.single_block_recurrence_years() < cfg.simulation_years / 5
+    assert cfg.single_block_recurrence_years() < cfg.simulation_years / 2  # 44 years; events are mostly collective
     assert cfg.check_parameters() == []
 
 
@@ -42,3 +42,23 @@ def test_config_is_immutable_and_replaceable():
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.n_blocks_x = 3
     assert dataclasses.replace(cfg, n_blocks_x=3).n_blocks == 300
+
+
+def test_stiffnesses_follow_from_the_fault_geometry():
+    cfg = SimulationConfig()
+    assert cfg.k_coupling_n_m == pytest.approx(cfg.shear_modulus_pa * cfg.seismogenic_thickness_m)  # 3e14
+    assert cfg.k_loading_n_m == pytest.approx(cfg.shear_modulus_pa * cfg.block_area_m2 / cfg.loading_distance_m)
+    assert cfg.k_coupling_n_m / cfg.k_loading_n_m == pytest.approx(50)
+    thicker = SimulationConfig(seismogenic_thickness_m=20_000.0, loading_distance_m=40_000.0)
+    assert thicker.k_coupling_n_m == pytest.approx(2 * cfg.k_coupling_n_m)
+    assert thicker.k_loading_n_m == pytest.approx(cfg.k_loading_n_m / 2)
+
+
+def test_explicit_stiffnesses_override_the_geometry():
+    cfg = SimulationConfig(coupling_stiffness_n_m=6e13, loading_stiffness_n_m=2.4e13)
+    assert (cfg.k_coupling_n_m, cfg.k_loading_n_m) == (6e13, 2.4e13)
+
+
+def test_loading_distance_must_be_positive():
+    with pytest.raises(ValueError, match='loading_distance_m'):
+        SimulationConfig(loading_distance_m=0.0).validate()

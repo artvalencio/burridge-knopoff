@@ -15,21 +15,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 @pytest.fixture(scope='module')
 def result():
     cfg = SimulationConfig(n_blocks_x=6, n_blocks_y=4, n_sensors_x=3, n_sensors_y=2,
-                           simulation_years=30.0, sample_interval_years=0.1, snapshot_interval_years=1.0, seed=1)
+                           simulation_years=100.0, sample_interval_years=0.1, snapshot_interval_years=1.0, seed=1)
     return run(cfg)
 
 
 def test_sampling_schedule(result):
-    np.testing.assert_allclose(result.times_years, np.arange(301) * 0.1)
-    np.testing.assert_allclose(result.snapshot_years, np.arange(31) * 1.0)
-    assert result.potentials.shape == (301, 6)
-    assert result.displacements.shape == (31, 24) and result.displacements.dtype == np.float32
+    np.testing.assert_allclose(result.times_years, np.arange(1001) * 0.1)
+    np.testing.assert_allclose(result.snapshot_years, np.arange(101) * 1.0)
+    assert result.potentials.shape == (1001, 6)
+    assert result.displacements.shape == (101, 24) and result.displacements.dtype == np.float32
 
 
 def test_events_are_ordered_and_inside_the_run(result):
     starts = [e.start_years for e in result.events]
     assert len(starts) > 5
-    assert starts == sorted(starts) and 0 < starts[0] and starts[-1] <= 30.0
+    assert starts == sorted(starts) and 0 < starts[0] and starts[-1] <= 100.0
     for e in result.events:
         assert e.moment_n_m > 0 and e.n_slipped >= 1 and e.duration_s > 0
         assert e.max_slip_m <= e.total_slip_m
@@ -62,7 +62,7 @@ def test_single_block_events_are_periodic():
                            redraw_thresholds=False, simulation_years=100.0, sample_interval_years=1.0)
     res = run(cfg)
     recurrence = cfg.single_block_recurrence_years()
-    first = (cfg.static_force_n - cfg.dynamic_force_n) / cfg.loading_stiffness_n_m / cfg.plate_velocity_m_per_year
+    first = (cfg.static_force_n - cfg.dynamic_force_n) / cfg.k_loading_n_m / cfg.plate_velocity_m_per_year
     starts = np.array([e.start_years for e in res.events])
     # each slip carries the O(dt^2) error of the integration (~3e-6 at 100 steps per period)
     np.testing.assert_allclose(starts, first + recurrence * np.arange(len(starts)), rtol=1e-5)
@@ -71,7 +71,7 @@ def test_single_block_events_are_periodic():
 
 def test_an_event_running_at_the_end_is_recorded():
     base = SimulationConfig(n_blocks_x=1, n_blocks_y=1, n_sensors_x=1, n_sensors_y=1, heterogeneity=0.0)
-    first_s = (base.static_force_n - base.dynamic_force_n) / (base.loading_stiffness_n_m * base.plate_velocity_m_s)
+    first_s = (base.static_force_n - base.dynamic_force_n) / (base.k_loading_n_m * base.plate_velocity_m_s)
     cfg = dataclasses.replace(base, simulation_years=(first_s + 0.5) / SECONDS_PER_YEAR, sample_interval_years=0.5)
     res = run(cfg)
     assert len(res.events) == 1 and res.events[0].duration_s > 0.5
@@ -93,7 +93,7 @@ def test_results_can_be_streamed_to_disk(small_config, tmp_path):
 
 # ---- golden run: guards refactoring and performance work ----------------------------
 GOLDEN = os.path.join(HERE, 'golden_catalogue.json')
-GOLDEN_CONFIG = dict(n_blocks_x=8, n_blocks_y=8, n_sensors_x=3, n_sensors_y=3, simulation_years=40.0,
+GOLDEN_CONFIG = dict(n_blocks_x=8, n_blocks_y=8, n_sensors_x=3, n_sensors_y=3, simulation_years=100.0,
                      sample_interval_years=0.5, snapshot_interval_years=5.0, seed=2024)
 
 

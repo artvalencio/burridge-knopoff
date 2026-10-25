@@ -11,6 +11,7 @@ grid           index conventions, block and sensor coordinates
 model          the spring-block model: forces, loading, event-driven slip dynamics
 gravity        gravitational potential changes at the sensors
 events         event catalogue, seismic moment and moment magnitude
+analysis       magnitude-frequency statistics: b-value, completeness, local slopes
 simulation     run(), run_ensemble() and SimulationResult
 output         save_results(), load_results() (NPZ and CSV)
 visualization  plots and animation

@@ -90,3 +90,13 @@ def test_spinup_is_validated():
     with pytest.raises(ValueError, match='spinup_years'):
         SimulationConfig(spinup_years=-1.0).validate()
     assert any('spin-up' in w for w in SimulationConfig(spinup_years=200.0).check_parameters())
+
+
+def test_local_windows_start_at_the_completeness_magnitude():
+    m = gutenberg_richter_sample(1.0, 4.13, 6000, seed=8)
+    m = np.r_[m, np.linspace(3.0, 4.1, 300)]  # an incomplete tail below Mc
+    result = make_result(m, np.full(len(m), 50.0), SimulationConfig(spinup_years=10.0))
+    stats = analysis.gutenberg_richter(result)
+    assert stats['local'] and all(w.mc >= stats['mc'] for w in stats['local'])
+    assert stats['local'][0].mc == pytest.approx(stats['mc'])
+    assert all(w.b > 0 for w in stats['local'])

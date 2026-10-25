@@ -23,11 +23,19 @@ class SimulationConfig:
         block_spacing_m: distance between neighbouring blocks.
         seismogenic_thickness_m, rock_density_kg_m3: give the block mass
             (density x spacing^2 x thickness).
-    Springs
-        coupling_stiffness_n_m: springs between neighbouring blocks (default
-            about shear modulus x spacing).
+    Springs (derived from the geometry unless given explicitly)
+        coupling_stiffness_n_m: springs between neighbouring blocks. Default
+            None: shear modulus x seismogenic thickness (the elastic stiffness of
+            the slab between two blocks: modulus x cross-section H L / distance L).
         loading_stiffness_n_m: "leaf" springs pulling each block towards the
-            moving plate.
+            moving plate. Default None: shear modulus x block area /
+            loading_distance_m (shear of the block's column over the depth at
+            which the plate loads the fault).
+        loading_distance_m: that loading depth. The ratio k_c / k_p sets how far
+            stress is passed on (correlation length ~ sqrt(k_c / k_p) blocks); the
+            default 20 km gives 50, i.e. ~7 blocks. Much smaller ratios cut the
+            magnitude distribution off early (see analysis).
+        The effective values are k_coupling_n_m and k_loading_n_m.
     Friction (forces = stress x block area)
         static_friction_stress_pa: mean strength. A stuck block starts slipping
             when the force on it exceeds its strength.
@@ -60,8 +68,9 @@ class SimulationConfig:
     seismogenic_thickness_m: float = 10_000.0
     rock_density_kg_m3: float = 2700.0
 
-    coupling_stiffness_n_m: float = 6e13
-    loading_stiffness_n_m: float = 2.4e13
+    coupling_stiffness_n_m: float = None
+    loading_stiffness_n_m: float = None
+    loading_distance_m: float = 20_000.0
 
     static_friction_stress_pa: float = 10e6
     dynamic_friction_stress_pa: float = 7e6
@@ -104,6 +113,20 @@ class SimulationConfig:
         return self.plate_velocity_m_per_year / SECONDS_PER_YEAR
 
     @property
+    def k_coupling_n_m(self):
+        """Coupling stiffness: explicit, or shear modulus x seismogenic thickness."""
+        if self.coupling_stiffness_n_m is not None:
+            return self.coupling_stiffness_n_m
+        return self.shear_modulus_pa * self.seismogenic_thickness_m
+
+    @property
+    def k_loading_n_m(self):
+        """Loading stiffness: explicit, or shear modulus x block area / loading distance."""
+        if self.loading_stiffness_n_m is not None:
+            return self.loading_stiffness_n_m
+        return self.shear_modulus_pa * self.block_area_m2 / self.loading_distance_m
+
+    @property
     def static_force_n(self):
         return self.static_friction_stress_pa * self.block_area_m2
 
@@ -115,25 +138,28 @@ class SimulationConfig:
     def slip_time_step_s(self):
         """Time step during slip: a fraction of the period of the fastest oscillation
         (a block held by its loading spring and four coupling springs)."""
-        omega = math.sqrt((self.loading_stiffness_n_m + 4 * self.coupling_stiffness_n_m) / self.block_mass_kg)
+        omega = math.sqrt((self.k_loading_n_m + 4 * self.k_coupling_n_m) / self.block_mass_kg)
         return 2 * math.pi / omega / self.steps_per_period
 
     def single_block_recurrence_years(self):
         """Recurrence time of an isolated block of mean strength: it slips
         2 (F_s - F_d) / k_p per event and reloads at the rate k_p v_p."""
-        slip = 2 * (self.static_force_n - self.dynamic_force_n) / self.loading_stiffness_n_m
+        slip = 2 * (self.static_force_n - self.dynamic_force_n) / self.k_loading_n_m
         return slip / self.plate_velocity_m_per_year
 
     # ---- checks -------------------------------------------------------------
     def validate(self):
         """Raises ValueError naming the first invalid field; returns self."""
         positive = ['n_blocks_x', 'n_blocks_y', 'block_spacing_m', 'seismogenic_thickness_m', 'rock_density_kg_m3',
-                    'coupling_stiffness_n_m', 'loading_stiffness_n_m', 'static_friction_stress_pa',
+                    'loading_distance_m', 'static_friction_stress_pa',
                     'plate_velocity_m_per_year', 'shear_modulus_pa', 'n_sensors_x', 'n_sensors_y',
                     'sensor_height_m', 'simulation_years', 'sample_interval_years', 'snapshot_interval_years']
         for name in positive:
             if not getattr(self, name) > 0:
                 raise ValueError('%s must be positive, got %r' % (name, getattr(self, name)))
+        for name in ('coupling_stiffness_n_m', 'loading_stiffness_n_m'):
+            if getattr(self, name) is not None and not getattr(self, name) > 0:
+                raise ValueError('%s must be positive or None, got %r' % (name, getattr(self, name)))
         if not 0 <= self.dynamic_friction_stress_pa < self.static_friction_stress_pa:
             raise ValueError('dynamic_friction_stress_pa must be in [0, static_friction_stress_pa)')
         if not 0 <= self.heterogeneity < 1:

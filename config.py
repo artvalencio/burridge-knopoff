@@ -15,9 +15,10 @@ CONFIG = SimulationConfig(
     seismogenic_thickness_m=10_000.0,   # with the density, gives the block mass
     rock_density_kg_m3=2700.0,
 
-    # springs: block-to-block coupling and block-to-plate loading
-    coupling_stiffness_n_m=6e13,        # ~ shear modulus x spacing
-    loading_stiffness_n_m=2.4e13,
+    # springs, derived from the geometry: coupling = shear modulus x thickness (3e14 N/m),
+    # loading = shear modulus x block area / loading distance (6e12 N/m); set
+    # coupling_stiffness_n_m / loading_stiffness_n_m to override them
+    loading_distance_m=20_000.0,        # depth at which the plate loads the fault
 
     # friction (stress x block area = force) and its heterogeneity
     static_friction_stress_pa=10e6,

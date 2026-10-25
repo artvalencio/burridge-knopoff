@@ -87,12 +87,13 @@ def magnitude_of_completeness(magnitudes, bin_width=0.1):
     return round(float(edges[np.argmax(counts)]), 10)
 
 
-def local_b_values(magnitudes, width=1.0, step=0.5, min_events=50):
-    """Truncated b-values in windows [a, a + width), a = start, start + step, ...;
+def local_b_values(magnitudes, width=1.0, step=0.5, min_events=50, start=None):
+    """Truncated b-values in windows [a, a + width), a = start, start + step, ...
+    (default start: the smallest magnitude rounded down to a multiple of step);
     windows with fewer than min_events events are skipped."""
     m = np.asarray(magnitudes, dtype=float)
     out = []
-    a = math.floor(m.min() / step) * step
+    a = math.floor(m.min() / step) * step if start is None else start
     while a < m.max():
         inside = np.count_nonzero((m >= a) & (m < a + width))
         if inside >= min_events:
@@ -117,5 +118,6 @@ def gutenberg_richter(result, spinup_years=None, min_events=50):
         stats['b'] = b_value(m, stats['mc'])
     except ValueError:
         pass
-    stats['local'] = local_b_values(m, min_events=min_events)
+    # windows from Mc upwards: below it the catalogue is incomplete
+    stats['local'] = local_b_values(m[m >= stats['mc']], min_events=min_events, start=stats['mc'])
     return stats

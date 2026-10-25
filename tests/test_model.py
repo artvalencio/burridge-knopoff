@@ -19,7 +19,7 @@ def model(small_config):
 def test_no_coupling_force_at_rest_and_newtons_third_law(model, small_config):
     np.testing.assert_array_equal(model.coupling_force(np.zeros(small_config.n_blocks)), 0.0)
     u = np.random.default_rng(0).random(small_config.n_blocks)
-    assert abs(model.coupling_force(u).sum()) < 1e-9 * small_config.coupling_stiffness_n_m
+    assert abs(model.coupling_force(u).sum()) < 1e-9 * small_config.k_coupling_n_m
 
 
 def test_coupling_acts_between_geometric_neighbours_only(model, small_config):
@@ -29,14 +29,14 @@ def test_coupling_acts_between_geometric_neighbours_only(model, small_config):
         f = model.coupling_force(u)
         pulled = set(np.flatnonzero(f).tolist()) - {idx}
         assert pulled == set(grid.neighbours(idx, small_config))
-        np.testing.assert_allclose(f[list(pulled)], small_config.coupling_stiffness_n_m)
-        assert f[idx] == pytest.approx(-len(pulled) * small_config.coupling_stiffness_n_m)
+        np.testing.assert_allclose(f[list(pulled)], small_config.k_coupling_n_m)
+        assert f[idx] == pytest.approx(-len(pulled) * small_config.k_coupling_n_m)
 
 
 def test_total_force_adds_the_loading_spring(model, small_config):
     u = np.random.default_rng(1).random(small_config.n_blocks)
     model.u[:] = u
-    expected = model.coupling_force(u) + small_config.loading_stiffness_n_m * (model.plate_m - u)
+    expected = model.coupling_force(u) + small_config.k_loading_n_m * (model.plate_m - u)
     np.testing.assert_allclose(model.force(), expected)
 
 
@@ -63,7 +63,7 @@ def test_initial_stress_is_dynamic_and_next_failure_is_the_weakest_block(model, 
     np.testing.assert_allclose(model.force(), small_config.dynamic_force_n)
     dt, idx = model.time_to_failure()
     assert idx == int(np.argmin(model.static_force))
-    rate = small_config.loading_stiffness_n_m * small_config.plate_velocity_m_s
+    rate = small_config.k_loading_n_m * small_config.plate_velocity_m_s
     assert dt == pytest.approx((model.static_force.min() - small_config.dynamic_force_n) / rate)
     model.load(dt)
     assert model.force()[idx] == pytest.approx(model.static_force[idx], rel=1e-12)
@@ -80,7 +80,7 @@ def single():
 
 def test_single_block_stick_slip_cycle(single):
     cfg = single.config
-    kp, excess = cfg.loading_stiffness_n_m, cfg.static_force_n - cfg.dynamic_force_n
+    kp, excess = cfg.k_loading_n_m, cfg.static_force_n - cfg.dynamic_force_n
     omega = math.sqrt(kp / cfg.block_mass_kg)
     dt, idx = single.time_to_failure()
     assert dt == pytest.approx(excess / (kp * cfg.plate_velocity_m_s))
