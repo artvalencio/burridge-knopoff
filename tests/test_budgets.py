@@ -70,3 +70,13 @@ def test_long_range_run_time():
     start = time.perf_counter()
     run(cfg)
     assert time.perf_counter() - start < 45
+
+
+def test_velocity_weakening_gives_a_gutenberg_richter_b_value():
+    # v_w = 0.1 m/s, onset drop 0.3: b = 0.97 +/- 0.01 measured (two seeds), local
+    # slopes 0.85-1.05 over the first two magnitude units; Coulomb friction gives ~0.66
+    cfg = SimulationConfig(n_blocks_x=60, n_blocks_y=60, simulation_years=150.0, sample_interval_years=1.0,
+                           weakening_velocity_m_s=0.1, onset_drop=0.3)
+    stats, slopes = local_slopes(cfg)
+    assert 0.85 < stats['b'].b < 1.15
+    assert all(0.75 < b < 1.3 for offset, b in slopes if offset <= 2.0)

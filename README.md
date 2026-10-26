@@ -12,7 +12,7 @@ caused by the motion of the fault.
   magnitude-frequency statistics (b-value, completeness, local slopes)
 - exact potential changes at a 10 × 10 sensor array 5 km above the fault
 - NPZ/CSV output, animation, event maps and magnitude-frequency plot
-- 100 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
+- 121 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
 
 ![Potential change before and after a Mw 7.4 event (default run)](docs/event_comparison.png)
 
@@ -192,11 +192,30 @@ ruptures the whole grid. For the default run (events after 20 years):
 - local b: 0.56 (Mw 4.1–5.1), 0.61, 0.66, 0.77, 0.81 (6.1–7.1), then 1.75: the
   power law holds over about three magnitude units, up to the size of the grid
 
-Real faults typically show b ≈ 0.8–1.2. This model's b ≈ 0.6–0.8 is robust to
-the heterogeneity (0.2–0.9) and to the healing rule: it is a property of
-nearest-neighbour Coulomb spring-block models. Bringing it closer to 1 would
-need velocity-weakening friction (Carlson & Langer, 1989) or long-range
-elastic interactions.
+Real faults typically show b ≈ 0.8–1.2. With the default friction and
+nearest-neighbour coupling, this model's b ≈ 0.6–0.8 is robust to the
+heterogeneity (0.2–0.9) and to the healing rule. The optional physics changes
+that (60 × 60 blocks, 150 years; b above Mc):
+
+| Option | b | Local slopes | Time |
+|---|---|---|---|
+| none (default) | 0.66 ± 0.01 | 0.57–0.69, then cut off | 6 s |
+| `--weakening 0.1 0.3` | **0.97 ± 0.01** (other seed: 0.97; 100 × 100: 1.14) | 0.85–1.05, one power law | 3 s |
+| `--weakening 0.05 0.3` | 1.27 ± 0.01 | 1.06–1.43 | 3 s |
+| `--weakening 0.2 0.3` | 0.60 ± 0.01 | 0.46–0.71, then steep: excess of large "characteristic" events | 12 s |
+| `--range 3` | 0.71 ± 0.01 | 0.53–0.80 | 32 s |
+| `--range 5` | 0.74 ± 0.01 | 0.62–0.82 | 98 s |
+| `--range 3 --weakening 0.1 0.3` | 0.80 ± 0.01 | 0.68–0.85 | 21 s |
+
+- **Velocity weakening** (Carlson & Langer, 1989) produces a single power law
+  with b ≈ 1 when the weakening velocity is about 0.1 m/s. The onset drop
+  matters little between 0.2 and 0.5. Faster weakening (larger v_w) gives the
+  known Carlson-Langer regime: many small events plus an excess of large,
+  characteristic ones. The weakening velocity therefore acts as a dial on b,
+  so b ≈ 1 is a calibration, not a prediction of the model.
+- **Long-range stress transfer** barely changes b (0.71–0.74). It makes the
+  stress field smoother, and it is costlier: forces are updated incrementally
+  during slip, but each moving block still touches every coupled block.
 
 Version 2.0 used much weaker coupling (k_c/k_p = 2.5). Its distribution was
 cut off about one magnitude unit above Mc (local b 1.6, then 3.9). The
@@ -205,7 +224,7 @@ cutoff together; the estimators above separate the two.
 
 ```bash
 pip install -e .[test]
-pytest              # 100 fast tests
+pytest              # 121 fast tests
 pytest -m slow      # time/memory budgets and long-run statistics
 ```
 
