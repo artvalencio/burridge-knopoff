@@ -35,6 +35,24 @@ def neighbours(index, config):
     return out
 
 
+def interaction_stencil(config):
+    """Coupled offsets and their relative stiffness: (drow, dcol, weight) arrays.
+
+    All offsets with 0 < r <= interaction_range_blocks (r in block spacings) are
+    coupled with weight r^-interaction_exponent. The four nearest neighbours come
+    first, in the order left, right, below, above; the others follow by distance.
+    """
+    reach = config.interaction_range_blocks
+    offsets = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+    others = [(dr, dc) for dr in range(-reach, reach + 1) for dc in range(-reach, reach + 1)
+              if (dr, dc) not in offsets and 0 < dr * dr + dc * dc <= reach * reach]
+    offsets += sorted(others, key=lambda o: (o[0] ** 2 + o[1] ** 2, o))
+    drow = np.array([o[0] for o in offsets], dtype=np.int64)
+    dcol = np.array([o[1] for o in offsets], dtype=np.int64)
+    weight = np.hypot(drow, dcol) ** -float(config.interaction_exponent)
+    return drow, dcol, weight
+
+
 def block_positions(config):
     """Reference positions (x, y, z) of the blocks, shape (n_blocks, 3), in m."""
     rows, cols = np.mgrid[0:config.n_blocks_y, 0:config.n_blocks_x]

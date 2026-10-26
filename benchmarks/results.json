@@ -33,6 +33,23 @@
    "time_s": 11.796
   }
  },
+ "extensions": {
+  "20x20, 100 years": {
+   "events": 802,
+   "peak_mb": 8.7,
+   "time_s": 0.482
+  },
+  "50x50, 100 years": {
+   "events": 4991,
+   "peak_mb": 11.3,
+   "time_s": 3.811
+  },
+  "default 100x100, 100 years": {
+   "events": 20766,
+   "peak_mb": 20.9,
+   "time_s": 17.286
+  }
+ },
  "final": {
   "20x20, 100 years": {
    "events": 3423,
@@ -82,6 +99,13 @@
    "events": 84028,
    "peak_mb": 43.5,
    "time_s": 11.914
+  }
+ },
+ "tmp": {
+  "default 100x100, 100 years": {
+   "events": 20766,
+   "peak_mb": 20.9,
+   "time_s": 10.947
   }
  }
 }

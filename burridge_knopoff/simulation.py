@@ -76,12 +76,33 @@ def _array(store_dir, name, shape, dtype):
 def run(config, progress=None, store_dir=None):
     """Simulate `config.simulation_years` and return a SimulationResult.
 
-    progress: optional callable receiving the completed fraction (0..1) after
-        each event and at the end.
+    progress: True to show a progress bar (tqdm, in simulated years, on
+        stderr), or a callable receiving the completed fraction (0..1) whenever
+        at least 0.1% of the simulated time has passed, and at the end. Default (None or False): no progress report.
     store_dir: if given, the potentials and displacement snapshots are written
         to .npy files there (memory-mapped) instead of being kept in RAM.
     """
     config.validate()
+    bar = None
+    if progress is False:
+        progress = None
+    if progress is True:
+        from tqdm import tqdm
+        bar = tqdm(total=config.simulation_years, unit='yr', desc='Simulating', dynamic_ncols=True,
+                   bar_format='{desc}: {percentage:3.0f}%|{bar}| {n:.1f}/{total:.1f} yr '
+                              '[{elapsed}<{remaining}]{postfix}')
+
+        def progress(fraction):
+            # tqdm throttles redraws itself, so this is cheap even for many events
+            bar.update(fraction * config.simulation_years - bar.n)
+    try:
+        return _run(config, progress, store_dir, bar)
+    finally:
+        if bar is not None:
+            bar.close()
+
+
+def _run(config, progress, store_dir, bar):
     model = Model(config)
     sensors = SensorArray(config)
     end_s = config.simulation_years * SECONDS_PER_YEAR
@@ -92,6 +113,7 @@ def run(config, progress=None, store_dir=None):
     times_s, snap_s = times * SECONDS_PER_YEAR, snap_times * SECONDS_PER_YEAR
     delta = np.zeros(config.n_sensors)  # current potential change at the sensors
     next_sample = next_snap = 0
+    next_report = 0.0
     event_list = []
     dissipated = 0.0
 
@@ -125,7 +147,11 @@ def run(config, progress=None, store_dir=None):
             n_slipped=len(result.slipped), total_slip_m=float(result.slip.sum()),
             max_slip_m=float(result.slip.max()), peak_velocity_m_s=result.peak_velocity_m_s,
             moment_n_m=moment, magnitude=ev.moment_magnitude(moment)))
-        if progress is not None:
+        if progress is not None and model.time_s >= next_report:
+            # at most ~1000 reports: cheap even when there are many events
+            next_report = model.time_s + end_s / 1000
+            if bar is not None:
+                bar.set_postfix_str('%d events' % len(event_list), refresh=False)
             progress(min(model.time_s / end_s, 1.0))
     record_until(np.inf)  # an event completed after the end fills the last samples
     if progress is not None:
