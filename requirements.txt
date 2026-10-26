@@ -2,5 +2,6 @@
 numpy>=1.22
 numba>=0.56
 matplotlib>=3.5
+tqdm>=4.40
 # tests
 pytest

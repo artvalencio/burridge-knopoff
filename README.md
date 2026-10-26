@@ -12,7 +12,7 @@ caused by the motion of the fault.
   magnitude-frequency statistics (b-value, completeness, local slopes)
 - exact potential changes at a 10 × 10 sensor array 5 km above the fault
 - NPZ/CSV output, animation, event maps and magnitude-frequency plot
-- 121 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
+- 126 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
 
 ![Potential change before and after a Mw 7.4 event (default run)](docs/event_comparison.png)
 
@@ -32,7 +32,8 @@ From Python:
 ```python
 from burridge_knopoff import SimulationConfig, run, save_results
 
-result = run(SimulationConfig(n_blocks_x=50, n_blocks_y=50, simulation_years=100, seed=1))
+result = run(SimulationConfig(n_blocks_x=50, n_blocks_y=50, simulation_years=100, seed=1),
+             progress=True)   # optional progress bar (simulated years, event count)
 print(len(result.events), max(e.magnitude for e in result.events))
 result.potentials            # (samples, sensors) potential change, J/kg
 result.catalogue             # structured array of events
@@ -42,7 +43,7 @@ save_results(result, 'my_run')
 ## Requirements
 
 - Python 3.9 or later
-- numpy (≥ 1.22), numba (≥ 0.56), matplotlib (≥ 3.5): `pip install -r requirements.txt`,
+- numpy (≥ 1.22), numba (≥ 0.56), matplotlib (≥ 3.5), tqdm (≥ 4.40, progress bar): `pip install -r requirements.txt`,
   or `pip install .` to also get the `burridge-knopoff` command
 - optional: FFmpeg for an MP4 animation (otherwise a GIF is written)
 
@@ -126,7 +127,9 @@ configuration would produce no events in the simulated time.
 Command-line options override the grid, sensors, years, intervals, seed and
 spin-up (`--spinup`) for one run, and turn on the optional physics:
 `--weakening V_W DROP` and `--range R`. Others: `--output DIR`, `--stream` (write series to disk while
-simulating), `--block-csv`, `--no-plots`, `--max-frames N`. Exit status: 0 on
+simulating), `--block-csv`, `--no-plots`, `--max-frames N`, `--no-progress` (hide the
+progress bar, which shows simulated years, the event count and the time
+remaining). Exit status: 0 on
 success, 1 if saving or plotting failed (the rest still runs), 2 for invalid
 parameters.
 
@@ -224,7 +227,7 @@ cutoff together; the estimators above separate the two.
 
 ```bash
 pip install -e .[test]
-pytest              # 121 fast tests
+pytest              # 126 fast tests
 pytest -m slow      # time/memory budgets and long-run statistics
 ```
 

@@ -40,6 +40,7 @@ def _parser(defaults):
     p.add_argument('--stream', action='store_true', help='write series to disk while simulating (low memory)')
     p.add_argument('--block-csv', action='store_true', help='also write the block displacements as CSV')
     p.add_argument('--no-plots', action='store_true', help='skip the plots and animation')
+    p.add_argument('--no-progress', action='store_true', help='hide the progress bar')
     p.add_argument('--max-frames', type=int, default=300, help='frames of the animation')
     return p
 
@@ -94,7 +95,7 @@ def main(argv=None, config=None):
         print('      warning: ' + warning)
     print('[2/4] Simulating...', flush=True)
     start = time.perf_counter()
-    result = run(cfg, store_dir=data_dir if args.stream else None)
+    result = run(cfg, store_dir=data_dir if args.stream else None, progress=not args.no_progress)
     print('      done in %.1f s' % (time.perf_counter() - start))
     print('[3/4] Saving data to %s' % data_dir, flush=True)
     try:
