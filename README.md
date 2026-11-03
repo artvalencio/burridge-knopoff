@@ -14,7 +14,7 @@ caused by the motion of the fault.
 - NPZ/CSV output, animation, event maps and magnitude-frequency plot
 - 126 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
 
-![Potential change before and after a Mw 7.7 event (default 500 km run)](docs/event_comparison_500km.png)
+![Potential change before and after a Mw 7.1 event starting at the centre of the grid, (250, 248) km (default 500 km run)](docs/event_comparison_500km.png)
 
 ## Quick start
 
