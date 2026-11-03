@@ -6,6 +6,7 @@ Goals:
 2. **Earth tides** (Moon and Sun) in both the 2-D and the 3-D model. Each block feels the tidal **force** (shear driving it along its slip direction, plus the direct body force) and the tidal **distension** (extension normal to the fault, which unclamps it and lowers its friction). The interseismic integration then advances in **steps of about 1 hour**.
 3. A **comparison with and without tides**, for both models, of the number of events and of the co-seismic gravity changes.
 4. An **animation of pre-seismic gravity changes**: for a chosen event, the map of gravity relative to one year before it, one frame per hour up to the event (§5).
+5. A **nonlinear-dynamics study** of both models (§6): Lyapunov exponents and predictability, attractor reconstruction, recurrence quantification, synchronisation, and information flow (mutual information, transfer entropy, CaMI), with and without tides.
 
 The work follows the rules of the existing `IMPROVEMENT_PLAN.md`: test first (red, green, refactor), one cycle per commit, and benchmarks before any performance work. With tides off, every existing result stays bit-identical; the golden catalogue test guards this.
 
@@ -381,7 +382,189 @@ A quantitative companion tests for any precursory gravity signal. For all events
 
 ---
 
-## 6. Phases
+## 6. Nonlinear dynamics of the model
+
+The Burridge-Knopoff model is a classic example of a nonlinear dynamical system. Two spring-coupled blocks can already be chaotic (Huang & Turcotte, 1990), and the model's cellular-automaton limit is the Olami-Feder-Christensen model of self-organised criticality. This section uses the standard tools of nonlinear dynamics to answer five questions:
+
+1. Is the model chaotic, and how far ahead are its events predictable?
+2. What is the dimension of its dynamics, and can it be recovered from what sensors observe?
+3. Do parts of the fault synchronise with each other, and with the tides?
+4. Which way does information flow between fault regions, sensors and the tidal forcing?
+5. How do the answers change with tides, between 2-D and 3-D, and with the model parameters?
+
+Information measures use the CaMI toolbox in this workspace (`cami-python`): mutual information, transfer entropy, CaMI, the directionality index, pointwise measures, surrogate tests and `multithread_causality`. `coupledlogistic` provides networks with known coupling to validate the pipeline.
+
+### 6.1 What kind of dynamical system this is, and what follows
+
+| Property | Consequence for the analysis |
+|---|---|
+| **noise-driven by default**: with `redraw_thresholds=True` every slipped block draws a new strength from the random-number generator | Lyapunov exponents and attractors are only defined for a deterministic system, or for a random dynamical system with shared noise (Arnold, 1998). Two modes are used: **deterministic** (`redraw_thresholds=False`, fixed heterogeneity) for exponents and dimensions, and the **default** (noise-driven) for statistical, recurrence and information measures |
+| shared noise | a new option `rng_mode='per-block'` gives each block its own counter-based stream: its k-th redraw always uses the same number. Two nearby trajectories then see the same noise, and Lyapunov exponents of the noise-driven model are defined. The default stays `global`, so the golden catalogue is unchanged |
+| **piecewise smooth**: stick-slip switching, failure thresholds | tangent-space (variational) methods need **saltation matrices** at every switch (Müller, 1995). Finite perturbations can change which blocks slip, so the separation jumps. The **finite-size Lyapunov exponent** (FSLE; Aurell et al., 1997) covers this |
+| **fast-slow**: events last seconds, loading takes years | natural discrete time: the **event-to-event map** x_{n+1} = Φ(x_n), with x the stress state just after event n. Exponents are reported per event and per year |
+| **high-dimensional**: 62,500 blocks (2-D), 32,000 patches (3-D) | no low-dimensional attractor is expected at full size. Dimension estimates from data cannot exceed ~2 log₁₀ N_points (Eckmann & Ruelle, 1992). Exact spectra are computed on small grids (2 to 20 × 20 blocks), and grid-size scaling tests whether the chaos is **extensive** (Lyapunov dimension ∝ number of blocks) |
+| **non-autonomous with tides**: quasi-periodic forcing | synchronisation with the forcing (phase locking, Arnold tongues) becomes a central question (§6.6) |
+
+### 6.2 Observables
+
+New code: `burridge_knopoff/dynamics/observables.py`, which works for both models through the shared interface.
+
+| Observable | Time base | Size (2-D default, 100 years) | Use |
+|---|---|---|---|
+| full state: stress gap D_i = F_i − S_i, displacements u | event-indexed or regular | 62,500 per state | Lyapunov exponents (§6.3) |
+| total elastic energy E(t), mean stress, plate − mean displacement | regular, 0.01 year (10,001 samples) | small | embedding, recurrence |
+| cumulative moment (Benioff strain) | regular | small | embedding, recurrence |
+| event series: inter-event times Δt_n, magnitudes M_n, hypocentres | event-indexed (~1.2·10⁵ events) | small | embedding of event trains (Sauer, 1994), return maps |
+| **regional moment-release series**: fault split into 5 × 5 regions of 100 km, moment per region per day | daily (36,525 × 25) | 7 MB | synchronisation, information flow |
+| per-event moment by region | event × 25 regions, float32 | 12 MB | regional event trains |
+| gravity at the sensors: ΔΦ, Δg_z, tide-removed residuals | 0.01 year, or hourly in replay windows (§5) | 625 series | embedding, recurrence, information flow, sensor network |
+| leading spatial modes of the gravity field (EOF/SVD) | regular | a few series | low-dimensional projection (Broomhead & King, 1986) |
+| tidal Coulomb stress and tidal phase | hourly | 8,766 per year | forcing in §6.6 and §6.7 |
+
+Model support needed:
+
+- `Model.snapshot()` / `restore()` and a stepping API, `simulation.advance(state, until_s)`, refactored from the run loop; `run` and `replay` use it. Two-trajectory exponents use the same API.
+- the per-block random streams of §6.1;
+- per-event regional moments;
+- energy at the sample times (O(N) per sample).
+- One replay pass records hourly windows for **many** target events, generalising `replay` (§5.2) to a list of windows, so that §6.7 can pool them.
+
+### 6.3 Lyapunov exponents and predictability
+
+Four estimates, from most exact to most observational:
+
+| Method | Where | What it gives |
+|---|---|---|
+| **tangent dynamics with saltation matrices**, QR re-orthonormalisation (Benettin et al., 1980) | small grids (≤ 20 × 20), deterministic | the full spectrum λ₁ ≥ λ₂ ≥ …, and the Kaplan-Yorke dimension. Between events the map is linear. The Jacobian of the event map includes the failure-time shift (δt* = −δF_i/(k_p v_p) for the failing block i) and the saltations at each start and stop of a block |
+| **two-trajectory (Benettin) divergence**: perturb the state by δ, advance reference and copy to common times, renormalise periodically | any size, deterministic or `per-block` noise | the largest exponent λ₁, per year and per event |
+| **finite-size exponent** λ(δ): mean time for a perturbation to grow from δ to 2δ, over scales δ from 10⁻¹² to 10⁻¹ of the strength excess | any size | separates the smooth small-scale divergence from the jumps where a different set of blocks slips |
+| **predictability horizon**: for perturbations δ, the time until the perturbed catalogue first differs (a different hypocentre, or Mw differing by > 0.1), per magnitude class | any size | how far ahead small and large events are predictable, the physically relevant answer; expected T(δ) ≈ (1/λ₁) ln(Δ/δ) in the smooth regime |
+| **from data**: Rosenstein et al. (1993) and Kantz (1994) estimators on reconstructed observables (§6.4) | gravity, energy, event trains | what an observer could infer. Compared with the model's true λ₁, this measures how much the sensors reveal |
+
+Reference cases:
+
+- **single block:** periodic, so λ₁ ≤ 0 for the event map;
+- **two blocks** with asymmetric friction: chaotic (Huang & Turcotte, 1990), λ₁ > 0;
+- **single block with sinusoidal forcing:** an integrate-and-fire oscillator whose firing phase follows a circle map. Its exponent is negative when phase-locked and positive in the chaotic region between tongues (Keener et al., 1981).
+
+### 6.4 Attractor reconstruction and dimensions
+
+New code: `dynamics/embedding.py`.
+
+- **Delay embedding** (Takens, 1981; Sauer et al., 1991) of the scalar observables of §6.2.
+  - Event trains are embedded by their inter-event intervals, which is valid for integrate-and-fire systems (Sauer, 1994).
+  - Multivariate embeddings combine sensors or leading EOFs.
+- **Delay**: first minimum of the auto-mutual information (Fraser & Swinney, 1986), computed with `cami.mutual_info(x, x, delay=τ)`.
+- **Dimension**: false nearest neighbours (Kennel et al., 1992) and Cao's method (1997).
+- **Correlation dimension** (Grassberger & Procaccia, 1983), with a Theiler window (Theiler, 1986) and the Eckmann-Ruelle bound. It is reported only where the scaling region is clear, with the bound stated alongside.
+- **Return maps**: Δt_{n+1} vs Δt_n and M_{n+1} vs M_n for large events (Mw ≥ 7). These show the structure of the earthquake cycle: characteristic recurrence, or clustering.
+- **Grid-size scaling**: Kaplan-Yorke dimension (§6.3) vs number of blocks, against the data dimension of the macroscopic observables. Comparing the two shows how much of the high-dimensional dynamics the gravity sensors can recover.
+
+### 6.5 Recurrence plots and recurrence quantification analysis
+
+New code: `dynamics/recurrence.py` (numba).
+
+- **Recurrence plots** of the reconstructed states (Eckmann et al., 1987). Recurrence quantification (Marwan et al., 2007) measures:
+  - recurrence rate RR;
+  - determinism DET, with the longest diagonal L_max (inversely related to λ₁);
+  - diagonal-line entropy ENTR;
+  - laminarity LAM and trapping time TT.
+
+  The threshold is fixed by the recurrence rate (e.g. RR = 5 %), so that runs can be compared.
+- **Windowed RQA** along the run, to detect transitions:
+  - Does DET or LAM change in the year before Mw ≥ 7 events? Computed on the hourly windows of §5, in the same pre-seismic framework, with random windows as the null.
+  - The spin-up transient shows as a non-stationary block, a useful self-check.
+- **Cross- and joint recurrence** (Romano et al., 2004), between sensors, regions, or gravity and energy, as inputs to §6.6.
+- **With tides:** diagonal lines spaced at tidal periods (12.42 h, 23.93 h, …) in the hourly raw-gravity recurrence plots, and their removal in the residuals. These make a visual and quantitative check of the tide removal of §5.
+- **Rupture recurrence**: a similarity matrix between the slip patterns of large events (Jaccard index of the slipped block sets). Do the same ruptures repeat (characteristic earthquakes), and do tides change that?
+
+### 6.6 Synchronisation
+
+New code: `dynamics/synchronization.py`.
+
+| Question | Method |
+|---|---|
+| do fault regions synchronise? | **event phase** per region: φ = 2π (t − t_k)/(t_{k+1} − t_k) between successive large regional events (Pikovsky et al., 2001). Phase-locking value between region pairs; the Kuramoto order parameter over all 25 regions vs time. System-wide events are moments of high synchrony |
+| how synchronised are the event trains? | **event synchronisation** (Quian Quiroga et al., 2002) between regional event trains, with its delay asymmetry (which region tends to go first) |
+| what controls synchrony? | sweeps of the coupling ratio k_c/k_p, the coupling range, the heterogeneity h and the weakening velocity v_w (§6.9). Expectation: synchrony rises with k_c/k_p and range, together with the excess of large events |
+| do tides lock event times? | **forced synchronisation**: the firing-phase return map φ_{n+1} vs φ_n relative to M2, and to the long-period tides closer to the recurrence times (Mf 13.7 d, Mm 27.6 d, Ssa 182.6 d, and the 18.6-year nodal modulation). Rotation numbers; **Arnold tongues** in the plane of tidal amplitude (`tide_scale`) and forcing period vs recurrence time, for the single block and small grids with a pure sinusoidal test forcing (the §2.4 hook) |
+| do gravity sensors synchronise? | phase coherence between sensors is dominated by the tide, a common driver. It is computed on raw *and* tide-removed residuals (§5): the difference measures how much apparent synchrony is due to the driver alone |
+
+### 6.7 Information theory and causality (CaMI toolbox)
+
+New code: `dynamics/information.py`, thin wrappers over `cami`, with the encoding choices documented.
+
+| Analysis | Series | Measure | Expected (hypothesis) |
+|---|---|---|---|
+| **causal network of the fault** | 25 regional daily moment series, 600 directed pairs | transfer entropy and CaMI (Schreiber, 2000; Bianco-Martinez & Baptista, 2018), directionality index; `surrogate_test` with circular shifts | significant links mainly between neighbouring regions, decaying with distance as the coupling does: a test of whether the measures recover the **known physical coupling**. No net direction in 2-D (uniform loading). In 3-D, flow from deep to shallow regions, because loading comes from the creeping zone |
+| **gravity and seismicity** | each sensor's Δg (residual) vs the moment of the region below | TE in both directions, `pointwise` for time-resolved flow | TE from seismicity to gravity (gravity steps follow slip). Any significant flow from gravity to *future* seismicity beyond foreshock steps would be a precursory signal; none is expected in 2-D, and §5.5's null tests it in 3-D |
+| **pre-seismic windows pooled** | hourly windows before every Mw ≥ 7 event (§5 replays), from all seeds | `multithread_causality` pools many short windows of the same phenomenon, which is what it was built for | does information flow in the region change as a large event approaches, compared with random windows? |
+| **tides and seismicity** | hourly tidal Coulomb stress vs the event-rate series | TE and CaMI, with no-tide runs as the null | an information-based measure of tidal triggering, beside the Schuster test (§4.2): it captures any nonlinear dependence, not only phase concentration |
+| **embedding delay** | each observable vs itself | auto-mutual information | used in §6.4 |
+| **integration** | all regions | `total_correlation` | rises with synchrony (§6.6), a cross-check |
+
+**Encoding.** Event series are sparse and heavy-tailed, so use `symbolic_type='equal-points'`, with log-moment or counts. Gravity uses equal-points on values and on increments (`'equal-growth-points'`).
+
+**Validation.** On `coupledlogistic` networks with known links, the same pipeline (encoding, surrogates, thresholds) must recover the links before it is applied to the model.
+
+### 6.8 Deterministic chaos or noise?
+
+The default model is noise-driven (§6.1), so every claim of "chaos" needs a test against stochastic alternatives:
+
+- **ordinal patterns**: permutation entropy and the complexity-entropy plane (Bandt & Pompe, 2002; Rosso et al., 2007), which places deterministic chaos and correlated noise in different regions. Applied to the deterministic, `per-block` and default modes;
+- **surrogates for nonlinearity**: IAAFT surrogates (Schreiber & Schmitz, 1996) for regular series, and interval-shuffled and time-shifted surrogates for event trains, with RQA DET, FNN fraction and the prediction error of a nearest-neighbour forecast as statistics;
+- the **noise level** as a parameter: the redraw spread (`heterogeneity`) dials the noise from 0 (deterministic) upwards. How do λ₁, DET and the complexity-entropy position change along it?
+
+### 6.9 Parameter sweeps: a dynamical phase diagram
+
+Sweeps on development grids (50 × 50 to 100 × 100), with full-size confirmation of selected points:
+
+| Parameter | Range |
+|---|---|
+| k_c/k_p (via `loading_distance_m`) | 2.5 – 200 |
+| heterogeneity h | 0 – 0.9 |
+| coupling range | 1, 3, 5 |
+| weakening velocity v_w | off, 0.05 – 0.2 m/s |
+| `tide_scale` | 0, 1, 10, 100, 1000 |
+| model | 2-D, 3-D |
+
+Each point gets λ₁, the predictability horizon, the Kaplan-Yorke dimension (small grids), RQA DET and LAM, the Kuramoto order parameter, the mean regional transfer entropy and the b-value. The result is a phase diagram of regimes (periodic, phase-locked, chaotic, noise-dominated), set beside the seismicity statistics. This connects to the known regimes of the model: characteristic events at large v_w, power laws at v_w ≈ 0.1 m/s.
+
+### 6.10 Code layout, dependencies and tests
+
+```
+burridge_knopoff/dynamics/
+├── observables.py       # §6.2 series from results, replays and catalogues
+├── lyapunov.py          # tangent + saltation (small grids), two-trajectory, FSLE, predictability; Rosenstein/Kantz from data
+├── embedding.py         # delays (AMI via cami), FNN, Cao, delay vectors, correlation sum, return maps
+├── recurrence.py        # RP, RQA, windowed RQA, cross/joint recurrence, rupture similarity (numba)
+├── synchronization.py   # event phases, PLV, Kuramoto, event synchronisation, firing-phase maps, rotation numbers
+├── information.py       # regional TE/CaMI networks, gravity-seismicity, pooled windows, tide-seismicity (cami)
+└── surrogates.py        # IAAFT, time-shift, interval shuffle
+```
+
+**Dependencies.** An optional extra, `pip install .[dynamics]`, installs `cami` (the workspace's `cami-python`) and `coupledlogistic`. The estimators are implemented here (small, numba, tested) rather than taken from large packages. `nolds`/`pyunicorn` are used in tests only as cross-checks, when installed.
+
+| Test | Check |
+|---|---|
+| estimators on reference systems | Hénon map: λ₁ ≈ 0.42 per iteration, D₂ ≈ 1.2, FNN dimension 2. Lorenz system: λ₁ ≈ 0.91, D₂ ≈ 2.05, FNN dimension 3. A sine gives DET ≈ 1; white noise gives low DET and maximal permutation entropy |
+| Lyapunov on the model | single block λ₁ ≤ 0; two-block chaotic case λ₁ > 0; tangent-space and two-trajectory λ₁ agree within 10 % on an 8 × 8 deterministic grid; δ = 0 gives identical trajectories |
+| per-block random streams | reproducible for a seed; the k-th redraw of block i is independent of the order of events; the golden catalogue is unchanged with the default `global` mode |
+| synchronisation | identical phases give PLV = 1; independent phases give ~1/√n; event synchronisation detects a known delay in shifted trains |
+| forced single block | firing-phase map phase-locked (rotation number constant) inside a tongue and quasi-periodic outside, matching an independently computed circle map |
+| information | the `coupledlogistic` networks are recovered by the regional pipeline; on an 8 × 8 nearest-neighbour model, TE between adjacent regions exceeds TE between distant ones |
+| snapshot/advance | `advance` in pieces gives the same catalogue as `run`; `restore(snapshot())` is exact |
+
+### 6.11 Expected outcomes (hypotheses to test)
+
+- **H4, chaos and predictability:** the deterministic model is chaotic (λ₁ > 0 on all but the smallest grids). The predictability horizon of large events is finite and shorter than their recurrence time. The `per-block` noise-driven model has a larger λ₁.
+- **H5, dimension:** the chaos is extensive (Kaplan-Yorke dimension ∝ number of blocks), so the 500 km model has no low-dimensional attractor. Data dimensions from sensors stay unsaturated and must be reported as lower bounds. Return maps of large events still show structure (the cycle).
+- **H6, synchronisation:** regional synchrony rises with coupling and with the share of large events. Tides phase-lock event timing strongly in this threshold model (consistent with H2), visible as wide Arnold tongues at scale ≥ 1.
+- **H7, information flow:** the transfer-entropy network follows the physical coupling (neighbours in 2-D; deep-to-shallow in 3-D). There is no significant gravity-to-future-seismicity flow beyond foreshock steps. Tide-to-seismicity transfer entropy is significant with tides and absent in the null.
+
+---
+
+## 7. Phases
 
 Each phase ends with the full fast suite green. The slow budgets are updated with ~3× margin over the measured values.
 
@@ -393,10 +576,14 @@ Each phase ends with the full fast suite green. The slow budgets are updated wit
 | 4 | Okubo gravity Green's functions and sensors in 3-D | tests of §3.4 |
 | 5 | tides in 3-D (reuse) | tests of §2.4 rerun on `Model3D` |
 | 6 | pre-seismic animation (§5): `replay`, `PreseismicWindow`, `preseismic_animation`, CLI `--preseismic`. The 2-D part can start right after phase 2 (or after phase 1 with `--quantity potential`); the 3-D part after phase 4 | tests of §5.4; one 2-D default animation rendered and checked by eye |
-| 7 | experiments of §4 and the animations of §5.5: development grids first (100 km), then full size | report with tables, figures and animations |
-| 8 | README sections (tides, 3-D, pre-seismic animation), benchmarks, budgets | docs match measured numbers |
+| 7 | nonlinear-dynamics infrastructure (§6.2): `snapshot`/`restore`, `advance`, per-block random streams, regional moments, energy series, multi-window replay | tests of §6.10 (snapshot/advance, per-block streams); golden catalogue unchanged |
+| 8 | `dynamics/` estimators validated on reference systems (Hénon, Lorenz, sine/noise, `coupledlogistic`), then on the single-block, two-block and 8 × 8 models | tests of §6.10 |
+| 9 | experiments of §4, the animations of §5.5 and the analyses of §6.3–§6.9: development grids first (100 km), then full size | report with tables, figures and animations; H1–H7 confirmed or not |
+| 10 | README sections (tides, 3-D, pre-seismic animation, nonlinear dynamics), benchmarks, budgets | docs match measured numbers |
 
-## 7. Risks and open points
+The nonlinear-dynamics phases (7–8) depend only on the 2-D model and can run in parallel with phases 3–5 (3-D). Their tide-related parts (§6.6 forced synchronisation, tide-to-seismicity transfer entropy) need phase 2.
+
+## 8. Risks and open points
 
 | Risk | Mitigation |
 |---|---|
@@ -410,22 +597,56 @@ Each phase ends with the full fast suite green. The slow budgets are updated wit
 | the tidal gravity (~150 μGal) hides the tectonic signal in raw maps | the residual panel beside it, with its own colour bar |
 | `fit` tide removal absorbs part of the co-seismic steps | expected and measured: the `model` residual is the exact reference, and the difference between the two is reported |
 | a replay must follow the original history exactly | test of §5.4; replays use the same code path as `run`, never a re-implementation |
+| exponents and dimensions are ill-defined in the default (noise-driven) model | deterministic and `per-block` modes (§6.1); claims of chaos only with the tests of §6.8 |
+| dimension estimates on a 62,500-block system are meaningless if over-read | Eckmann-Ruelle bound stated with every estimate; exact spectra only on small grids; grid-size scaling instead of a single number |
+| saltation-matrix tangent dynamics are intricate | small grids only, cross-checked against two-trajectory estimates |
+| information measures on sparse, heavy-tailed event series are biased | equal-points encoding, surrogate thresholds, validation on `coupledlogistic` with known links; effect sizes rather than raw bits |
+| a common driver (tides, uniform loading) creates spurious synchrony and information flow | tide-removed residuals, no-tide null runs, and conditioning on the driver where the measure allows it |
 
 ## References
 
 - Agnew, D. C. (2007). Earth tides. *Treatise on Geophysics*, vol. 3, 163–195.
+- Arnold, L. (1998). *Random Dynamical Systems*. Springer.
+- Aurell, E., Boffetta, G., Crisanti, A., Paladin, G., & Vulpiani, A. (1997). Predictability in the large: an extension of the concept of Lyapunov exponent. *J. Phys. A*, 30, 1–26.
+- Bandt, C., & Pompe, B. (2002). Permutation entropy: a natural complexity measure for time series. *Phys. Rev. Lett.*, 88, 174102.
 - Ben-Zion, Y., & Rice, J. R. (1993). Earthquake failure sequences along a cellular fault zone in a three-dimensional elastic solid containing asperity and nonasperity regions. *JGR*, 98(B8), 14109–14131.
+- Benettin, G., Galgani, L., Giorgilli, A., & Strelcyn, J.-M. (1980). Lyapunov characteristic exponents for smooth dynamical systems and for Hamiltonian systems: a method for computing all of them. *Meccanica*, 15, 9–30.
+- Bianco-Martinez, E., & Baptista, M. S. (2018). Space-time nature of causality. *Chaos*, 28, 075509.
+- Broomhead, D. S., & King, G. P. (1986). Extracting qualitative dynamics from experimental data. *Physica D*, 20, 217–236.
+- Cao, L. (1997). Practical method for determining the minimum embedding dimension of a scalar time series. *Physica D*, 110, 43–50.
 - Cartwright, D. E., & Edden, A. C. (1973). Corrected tables of tidal harmonics. *Geophys. J. R. Astr. Soc.*, 33, 253–264.
 - Cochran, E. S., Vidale, J. E., & Tanaka, S. (2004). Earth tides can trigger shallow thrust fault earthquakes. *Science*, 306, 1164–1166.
 - Dieterich, J. H. (1987). Nucleation and triggering of earthquake slip: effect of periodic stresses. *Tectonophysics*, 144, 127–139.
+- Eckmann, J.-P., & Ruelle, D. (1992). Fundamental limitations for estimating dimensions and Lyapunov exponents in dynamical systems. *Physica D*, 56, 185–187.
+- Eckmann, J.-P., Kamphorst, S. O., & Ruelle, D. (1987). Recurrence plots of dynamical systems. *Europhys. Lett.*, 4, 973–977.
 - Farrell, W. E. (1972). Deformation of the Earth by surface loads. *Rev. Geophys.*, 10(3), 761–797.
+- Fraser, A. M., & Swinney, H. L. (1986). Independent coordinates for strange attractors from mutual information. *Phys. Rev. A*, 33, 1134–1140.
+- Grassberger, P., & Procaccia, I. (1983). Measuring the strangeness of strange attractors. *Physica D*, 9, 189–208.
+- Huang, J., & Turcotte, D. L. (1990). Are earthquakes an example of deterministic chaos? *Geophys. Res. Lett.*, 17(3), 223–226.
 - Ide, S., Yabe, S., & Tanaka, Y. (2016). Earthquake potential revealed by tidal influence on earthquake size–frequency statistics. *Nature Geoscience*, 9, 834–837.
+- Kantz, H. (1994). A robust method to estimate the maximal Lyapunov exponent of a time series. *Phys. Lett. A*, 185, 77–87.
+- Keener, J. P., Hoppensteadt, F. C., & Rinzel, J. (1981). Integrate-and-fire models of nerve membrane response to oscillatory input. *SIAM J. Appl. Math.*, 41, 503–517.
+- Kennel, M. B., Brown, R., & Abarbanel, H. D. I. (1992). Determining embedding dimension for phase-space reconstruction using a geometrical construction. *Phys. Rev. A*, 45, 3403–3411.
+- Marwan, N., Romano, M. C., Thiel, M., & Kurths, J. (2007). Recurrence plots for the analysis of complex systems. *Physics Reports*, 438, 237–329.
 - Meeus, J. (1998). *Astronomical Algorithms* (2nd ed.). Willmann-Bell.
+- Müller, P. C. (1995). Calculation of Lyapunov exponents for dynamic systems with discontinuities. *Chaos, Solitons & Fractals*, 5, 1671–1681.
 - Okada, Y. (1992). Internal deformation due to shear and tensile faults in a half-space. *BSSA*, 82(2), 1018–1040.
 - Okubo, S. (1991). Potential and gravity changes raised by point dislocations. *Geophys. J. Int.*, 105, 573–586.
 - Okubo, S. (1992). Gravity and potential changes due to shear and tensile faults in a half-space. *JGR*, 97(B5), 7137–7144.
+- Olami, Z., Feder, H. J. S., & Christensen, K. (1992). Self-organized criticality in a continuous, nonconservative cellular automaton modeling earthquakes. *Phys. Rev. Lett.*, 68, 1244–1247.
 - Petit, G., & Luzum, B. (2010). IERS Conventions (2010). IERS Technical Note 36.
+- Pikovsky, A., Rosenblum, M., & Kurths, J. (2001). *Synchronization: A Universal Concept in Nonlinear Sciences*. Cambridge University Press.
+- Quian Quiroga, R., Kreuz, T., & Grassberger, P. (2002). Event synchronization: a simple and fast method to measure synchronicity and time delay patterns. *Phys. Rev. E*, 66, 041904.
+- Romano, M. C., Thiel, M., Kurths, J., & von Bloh, W. (2004). Multivariate recurrence plots. *Phys. Lett. A*, 330, 214–223.
+- Rosenstein, M. T., Collins, J. J., & De Luca, C. J. (1993). A practical method for calculating largest Lyapunov exponents from small data sets. *Physica D*, 65, 117–134.
+- Rosso, O. A., Larrondo, H. A., Martin, M. T., Plastino, A., & Fuentes, M. A. (2007). Distinguishing noise from chaos. *Phys. Rev. Lett.*, 99, 154102.
+- Sauer, T. (1994). Reconstruction of dynamical systems from interspike intervals. *Phys. Rev. Lett.*, 72, 3811–3814.
+- Sauer, T., Yorke, J. A., & Casdagli, M. (1991). Embedology. *J. Stat. Phys.*, 65, 579–616.
 - Savage, J. C. (1983). A dislocation model of strain accumulation and release at a subduction zone. *JGR*, 88(B6), 4984–4996.
+- Schreiber, T. (2000). Measuring information transfer. *Phys. Rev. Lett.*, 85, 461–464.
+- Schreiber, T., & Schmitz, A. (1996). Improved surrogate data for nonlinearity tests. *Phys. Rev. Lett.*, 77, 635–638.
 - Schuster, A. (1897). On lunar and solar periodicities of earthquakes. *Proc. R. Soc. Lond.*, 61, 455–465.
+- Takens, F. (1981). Detecting strange attractors in turbulence. *Lecture Notes in Mathematics*, 898, 366–381.
 - Tanaka, S., Ohtake, M., & Sato, H. (2002). Evidence for tidal triggering of earthquakes as revealed from statistical analysis of global data. *JGR*, 107(B10), 2211.
+- Theiler, J. (1986). Spurious dimension from correlation integrals of filtered noise. *Phys. Rev. A*, 34, 2427–2432.
 - Ward, S. N. (2000). San Francisco Bay Area earthquake simulations: a step toward a standard physical earthquake model. *BSSA*, 90(2), 370–386.
