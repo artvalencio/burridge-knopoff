@@ -17,7 +17,9 @@ from burridge_knopoff.simulation import run  # noqa: E402
 
 RESULTS = os.path.join(HERE, 'results.json')
 CASES = {
-    'default 100x100, 100 years': (SimulationConfig(), 1),
+    'default 250x250, 100 years': (SimulationConfig(), 1),
+    # the default before the 500 km grid; name kept for comparison with stored results
+    'default 100x100, 100 years': (SimulationConfig(n_blocks_x=100, n_blocks_y=100, n_sensors_x=10, n_sensors_y=10), 1),
     '50x50, 100 years': (SimulationConfig(n_blocks_x=50, n_blocks_y=50), 2),
     '20x20, 100 years': (SimulationConfig(n_blocks_x=20, n_blocks_y=20), 3),
 }
