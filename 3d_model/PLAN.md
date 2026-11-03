@@ -5,6 +5,7 @@ Goals:
 1. A **3-D model**: the fault becomes a dipping surface in a 3-D elastic half-space, with depth, free-surface effects, vertical deformation and realistic co-seismic gravity changes.
 2. **Earth tides** (Moon and Sun) in both the 2-D and the 3-D model. Each block feels the tidal **force** (shear driving it along its slip direction, plus the direct body force) and the tidal **distension** (extension normal to the fault, which unclamps it and lowers its friction). The interseismic integration then advances in **steps of about 1 hour**.
 3. A **comparison with and without tides**, for both models, of the number of events and of the co-seismic gravity changes.
+4. An **animation of pre-seismic gravity changes**: for a chosen event, the map of gravity relative to one year before it, one frame per hour up to the event (§5).
 
 The work follows the rules of the existing `IMPROVEMENT_PLAN.md`: test first (red, green, refactor), one cycle per commit, and benchmarks before any performance work. With tides off, every existing result stays bit-identical; the golden catalogue test guards this.
 
@@ -282,11 +283,105 @@ Results are reported as effect sizes with CIs, not only p-values. With ~10⁵ ev
   - Δg CCDFs;
   - difference maps;
   - rate vs tidal stress.
+- Pre-seismic gravity animations (§5) of the largest event after the spin-up, for each model with tides off and on.
 - A results section appended to this plan (or a short report) stating H1–H3 as confirmed or not, with the numbers.
 
 ---
 
-## 5. Phases
+## 5. Pre-seismic gravity animation
+
+For a chosen event: an animation of the gravity map during the year before it, one frame per hour.
+
+### 5.1 Definition
+
+| Item | Definition |
+|---|---|
+| target event | index k in the catalogue, at time t_ev; default: the largest event after the spin-up |
+| window | t₀ = t_ev − 1 year (365.25 days; clipped at t = 0 for early events) to t_f = t_ev |
+| frames | t_j = t₀ + j · 1 h, j = 0 … 8,766: **8,767 frames**. The last is at t_ev, *just before* the event: its own co-seismic step is not included, since that is the subject of the co-seismic figure |
+| map | Δg_z(sensor, t_j) − Δg_z(sensor, t₀) at the 25 × 25 sensors, in μGal. Frame 0 is zero everywhere by definition |
+| quantity | `gravity` (Δg_z, default), or `potential` (ΔΦ, J/kg), which is available before the Δg kernel of §2.5 exists |
+
+What the maps can show depends on the model:
+
+| Model, condition | Sources of gravity variation within the year |
+|---|---|
+| 2-D, no tides | only the co-seismic steps of the events in the window (~1,250 per year on the 500 km grid). Blocks are stuck between events, so the map is piecewise constant and changes only at events |
+| 2-D, tides | the same kind of steps, from a different event history. The tidal gravity δ·∂W/∂r (±~150 μGal, nearly uniform over 500 km, varying every hour) is a separate component |
+| 3-D, no tides | event steps **plus a continuous interseismic drift**: steady creep below the locking depth deforms the surface (uplift and the free-air term), so gravity changes between events too |
+| 3-D, tides | both, plus the tidal gravity |
+
+**Panels.** The layout depends on whether the simulation included tides:
+
+| Simulation | Panels |
+|---|---|
+| without tides | one map: the gravity changes, which are all tectonic (slip, plus the 3-D interseismic creep) |
+| with tides | **two maps side by side**. *Left, raw:* the gravity change a gravimeter would record, i.e. the tectonic part plus the tidal gravity δ·∂W/∂r. *Right, residual:* the raw change with the tides removed |
+
+The tide is about 100 times larger than typical co-seismic steps. In the raw map it shows as a nearly uniform field rising and falling twice a day over all 500 km, which hides the steps. The residual map brings them back. Side by side, the two show what tide removal recovers.
+
+**Tide removal** (`--tide-removal`):
+
+- `model` (default): subtract the tidal gravity that the simulation applied, which is known exactly. The residual is then exactly the tectonic signal, a clean reference.
+- `fit`: what one would do with real gravimeter data. For each sensor, fit the amplitudes and phases of the main tidal constituents (M2, S2, N2, K2, K1, O1, P1, Q1, Mf, Mm) to the raw hourly series of the window by least squares, plus a linear drift, and subtract the fit. One year of hourly data resolves these constituents (S2/K2 and K1/P1 need 182.6 days). The co-seismic steps partly leak into the fit, so this residual shows how much of the tectonic signal real tide removal would keep. The fit uses the whole window, including times after each frame; this is acceptable for a retrospective animation, and stated in the caption.
+
+### 5.2 Obtaining hourly data: deterministic replay
+
+The regular run samples every 0.01 year (~88 h), and the target event is only known after the run. The animation therefore uses two passes:
+
+1. run the simulation and choose event k from the catalogue;
+2. **replay** the same configuration up to event k, recording the sensor state every hour from t₀.
+
+A run is deterministic for a given seed, so the replay follows the same history. This has already been done once: the README figure replayed the default run and reproduced event 121,041 (Mw 7.14, 8,908 blocks) exactly.
+
+- New API: `simulation.replay(config, event_index, window_years=1.0, frame_hours=1.0)` returns a `PreseismicWindow` with:
+  - frame times;
+  - frames relative to t₀ (n_frames × n_sensors) for Δg_z and ΔΦ;
+  - the tidal component, when tides are on;
+  - the events in the window, and the target event.
+- Without tides, the exact-jump loop fills the hourly frames between events, as `record_until` already does for samples. With tides, the hourly loop (§2.3) already visits every hour.
+- Cost: one run up to the event (3–6 min for the 2-D default) plus the recording. Memory: 8,767 × 625 × 8 bytes ≈ 44 MB per quantity.
+- 3-D: the same function through the shared model interface (§3.6). The drift between events comes from the creeping patches' Green's functions times v_p·Δt.
+
+### 5.3 The animation
+
+`visualization.preseismic_animation(window, path, tide_removal='model', fps=30)`:
+
+- **layout without tides:** one map, with a time-series strip below it.
+- **layout with tides:** two maps side by side, raw (left) and residual (right), with one time-series strip below spanning both. Both maps share the same frame time, sensors, axes and markers, so they stay in step.
+- **frames:** one per hour, with no subsampling; 8,767 frames last 4.9 min at 30 fps (`--fps` changes the duration, not the frames).
+- **colour scales:** fixed and symmetric for the whole window, so frames can be compared: the largest |Δg| over all frames, or a chosen percentile so that one large step does not wash out the rest. With tides, each map has **its own colour bar**: raw spans the tide (~±150 μGal) and residual the tectonic steps (~μGal). A shared scale would show the residual as blank.
+- **markers:** the target hypocentre as a star in every frame. Each event in the window appears as a circle at its hypocentre when it happens, sized by magnitude and fading over one week.
+- **labels:** time to the event as the title ("t − t_event = −123 d 04 h"), the number of events so far in the window, and with tides the removal method ("tides removed: model" or "fit").
+- **time-series strip:** Δg over the whole year at the sensor nearest the hypocentre, with a moving cursor. With tides it shows both curves, raw and residual, on separate y-axes because their scales differ by about 100×, and the tidal Coulomb stress at the hypocentre.
+- **output:** MP4 through FFmpeg, required here because a GIF of 8,767 frames would be hundreds of MB. Without FFmpeg the frames are still saved (NPZ) and the failure is reported, with exit status 1 as for other plot failures.
+- **speed:** only the colour array, the markers and the cursor are updated per frame (blitting). The target is under 10 ms per frame, about 1.5 min to encode.
+
+Command line: `python main.py --preseismic [EVENT]`, where EVENT is `largest` (default) or a catalogue index. Options: `--preseismic-years 1`, `--frame-hours 1`, `--tide-removal model|fit` (used only when the simulation had tides). It writes `plots/preseismic_event_K.mp4` and `data/preseismic_event_K.npz`. The 3-D experiments call the same functions.
+
+### 5.4 Tests
+
+| Test | Check |
+|---|---|
+| replay | reproduces the catalogue up to event k exactly (small grid, with and without tides) |
+| consistency | frames at times that coincide with the regular samples equal the regular run's values (relative to t₀) |
+| frames | 8,767 frames 1 h apart for a 1-year window; the first at t₀ and all zeros; the last at t_ev, equal to the state after event k − 1 (the target event excluded) |
+| 2-D without tides | frames change only at the first hour after an event in the window |
+| edge cases | window clipped when t_ev < 1 year; an event with no other event in its window gives all-zero tectonic frames |
+| animation | writes one frame per hour (writer stub, as in `test_visualization`); fixed colour limits across frames |
+| panels | one map without tides; two maps (raw, residual) with tides, each with its own colour bar, both showing the same frame time |
+| residual, `model` | raw − residual equals the tidal gravity applied, and the residual equals the tectonic frames of the same replay (to rounding) |
+| residual, `fit` | on a synthetic series (known tide + steps + drift) the fit recovers the constituent amplitudes within 1 % and the step sizes within 10 % |
+
+### 5.5 Use in the comparison
+
+Each model gets one animation of the largest event after the spin-up of seed 0, with tides off (one panel) and with tides on (raw and residual side by side). The two conditions have different histories, so these are different events. For tides on, both removal methods are rendered: comparing `model` and `fit` residuals shows how much of the pre-seismic signal survives realistic tide removal.
+
+A quantitative companion tests for any precursory gravity signal. For all events of Mw ≥ 7, it computes the pre-seismic Δg accumulated over the last year and the last 30 days at the sensor nearest the hypocentre. It compares these with the same quantities at random times (the null), with and without tides. In 2-D any signal can only come from foreshock steps; in 3-D the interseismic drift adds a background that the null comparison accounts for.
+
+---
+
+## 6. Phases
 
 Each phase ends with the full fast suite green. The slow budgets are updated with ~3× margin over the measured values.
 
@@ -297,10 +392,11 @@ Each phase ends with the full fast suite green. The slow budgets are updated wit
 | 3 | `bk3d` geometry, Okada DC3D (check-list), strike-invariant kernel and cache, back-slip loading, truncated slip kernel + far-field correction, `Model3D` behind the shared interface | Okada check-list; stability; energy balance; single-patch analytic cycle (isolated patch with back-slip loading); event merging after far-field correction |
 | 4 | Okubo gravity Green's functions and sensors in 3-D | tests of §3.4 |
 | 5 | tides in 3-D (reuse) | tests of §2.4 rerun on `Model3D` |
-| 6 | experiments of §4: development grids first (100 km), then full size | report with tables and figures |
-| 7 | README sections (tides, 3-D), benchmarks, budgets | docs match measured numbers |
+| 6 | pre-seismic animation (§5): `replay`, `PreseismicWindow`, `preseismic_animation`, CLI `--preseismic`. The 2-D part can start right after phase 2 (or after phase 1 with `--quantity potential`); the 3-D part after phase 4 | tests of §5.4; one 2-D default animation rendered and checked by eye |
+| 7 | experiments of §4 and the animations of §5.5: development grids first (100 km), then full size | report with tables, figures and animations |
+| 8 | README sections (tides, 3-D, pre-seismic animation), benchmarks, budgets | docs match measured numbers |
 
-## 6. Risks and open points
+## 7. Risks and open points
 
 | Risk | Mitigation |
 |---|---|
@@ -310,6 +406,10 @@ Each phase ends with the full fast suite green. The slow budgets are updated wit
 | Okubo (1992) formulas are long and error-prone | port from the paper with term-by-term tests; point-source far-field and Bouguer-limit checks |
 | the 2-D tide resolution uses a nominal fault orientation for a flat model | documented; the same orientation as the 3-D fault keeps the two comparable |
 | chaos makes single-run comparisons meaningless | ensembles of paired seeds, effect sizes with CIs (§4.3) |
+| 8,767-frame animations are slow to render and large | MP4 only, blitting, frames also saved as NPZ so that videos can be re-rendered without replaying |
+| the tidal gravity (~150 μGal) hides the tectonic signal in raw maps | the residual panel beside it, with its own colour bar |
+| `fit` tide removal absorbs part of the co-seismic steps | expected and measured: the `model` residual is the exact reference, and the difference between the two is reported |
+| a replay must follow the original history exactly | test of §5.4; replays use the same code path as `run`, never a re-implementation |
 
 ## References
 
