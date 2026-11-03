@@ -63,6 +63,25 @@ class SimulationConfig:
         n_sensors_x, n_sensors_y, sensor_height_m: sensor grid centred over the
             blocks, at this height above the fault plane z = 0 (default 25 x 25:
             one sensor every 20 km over the 500 km patch).
+    Earth tides (see tides.py)
+        tides: Moon and Sun tidal forcing; the time between events is then
+            stepped every tide_step_hours instead of jumped exactly. Off by default.
+        tide_bodies: comma-separated 'moon', 'sun'.
+        tide_stress, tide_body_force: the tidal stress on the fault (shear, and the
+            normal stress that unclamps it) and the direct tidal force on the block
+            masses, switchable separately.
+        tide_scale: amplification factor (0: hourly stepping without tide).
+        tide_spatial: 'linear' (fit over the area) or 'uniform' (centre value).
+        epoch_utc: ISO time of t = 0.
+        centre_latitude_deg, centre_longitude_deg: centre of the block grid.
+        fault_strike_deg, fault_dip_deg, fault_rake_deg: orientation used to resolve
+            the tidal stress (default: the 2011 Tohoku-oki mechanism). Model x points
+            along the down-dip azimuth (strike + 90), y along the strike.
+        friction_coefficient: static friction coefficient mu_s; the normal stress
+            changes the strength by mu_s and the sliding friction by mu_d =
+            mu_s F_d / F_s, per unit area.
+        love_h2, love_l2, love_k2, poisson_ratio: elastic response of the Earth.
+        skempton_b: undrained pore-pressure response (0: drained).
     Schedule
         simulation_years: simulated time.
         sample_interval_years: interval of the sensor time-series.
@@ -99,6 +118,26 @@ class SimulationConfig:
     n_sensors_x: int = 25
     n_sensors_y: int = 25
     sensor_height_m: float = 5000.0
+
+    tides: bool = False
+    tide_bodies: str = 'moon,sun'
+    tide_stress: bool = True
+    tide_body_force: bool = True
+    tide_scale: float = 1.0
+    tide_step_hours: float = 1.0
+    tide_spatial: str = 'linear'
+    epoch_utc: str = '2000-01-01T12:00:00'
+    centre_latitude_deg: float = 38.3
+    centre_longitude_deg: float = 143.0
+    fault_strike_deg: float = 203.0
+    fault_dip_deg: float = 10.0
+    fault_rake_deg: float = 88.0
+    friction_coefficient: float = 0.6
+    love_h2: float = 0.6078
+    love_l2: float = 0.0847
+    love_k2: float = 0.30
+    poisson_ratio: float = 0.25
+    skempton_b: float = 0.0
 
     simulation_years: float = 100.0
     sample_interval_years: float = 0.01
@@ -159,6 +198,11 @@ class SimulationConfig:
         omega = math.sqrt((self.k_loading_n_m + self.k_coupling_n_m * weights.sum()) / self.block_mass_kg)
         return 2 * math.pi / omega / self.steps_per_period
 
+    @property
+    def dynamic_friction_coefficient(self):
+        """mu_d = mu_s F_d / F_s: how much the sliding friction changes with normal stress."""
+        return self.friction_coefficient * self.dynamic_friction_stress_pa / self.static_friction_stress_pa
+
     def single_block_recurrence_years(self):
         """Recurrence time of an isolated block of mean strength: it slips
         2 (F_s - F_d) / k_p per event and reloads at the rate k_p v_p."""
@@ -191,6 +235,22 @@ class SimulationConfig:
                 raise ValueError('weakening_velocity_m_s must be positive or None, got %r' % self.weakening_velocity_m_s)
             if not 0 < self.onset_drop <= 1:
                 raise ValueError('onset_drop must be in (0, 1] with velocity weakening, got %r' % self.onset_drop)
+        if self.tides:
+            bodies = [b.strip() for b in self.tide_bodies.split(',') if b.strip()]
+            if not bodies or any(b not in ('moon', 'sun') for b in bodies):
+                raise ValueError("tide_bodies must list 'moon' and/or 'sun', got %r" % self.tide_bodies)
+            if not self.tide_step_hours > 0:
+                raise ValueError('tide_step_hours must be positive, got %r' % self.tide_step_hours)
+            if self.tide_spatial not in ('linear', 'uniform'):
+                raise ValueError("tide_spatial must be 'linear' or 'uniform', got %r" % self.tide_spatial)
+            if not self.tide_scale >= 0:
+                raise ValueError('tide_scale must be >= 0, got %r' % self.tide_scale)
+            if not 0 <= self.poisson_ratio < 0.5:
+                raise ValueError('poisson_ratio must be in [0, 0.5), got %r' % self.poisson_ratio)
+            if not self.friction_coefficient >= 0:
+                raise ValueError('friction_coefficient must be >= 0, got %r' % self.friction_coefficient)
+            if not -90 <= self.centre_latitude_deg <= 90:
+                raise ValueError('centre_latitude_deg must be in [-90, 90], got %r' % self.centre_latitude_deg)
         if not self.spinup_years >= 0:
             raise ValueError('spinup_years must be >= 0, got %r' % self.spinup_years)
         if self.steps_per_period < 10:
