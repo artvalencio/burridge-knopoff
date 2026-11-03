@@ -22,16 +22,16 @@ def compiled():
 
 def test_default_run_time():
     start = time.perf_counter()
-    run(SimulationConfig())  # 100 x 100 blocks, 100 years: ~10 s measured
-    assert time.perf_counter() - start < 40
+    run(SimulationConfig())  # 250 x 250 blocks, 25 x 25 sensors, 100 years: 190-360 s measured
+    assert time.perf_counter() - start < 900
 
 
 def test_default_run_memory():
     tracemalloc.start()
-    run(SimulationConfig())  # ~44 MB measured (the old code needed ~4.8 GB)
+    run(SimulationConfig())  # ~130 MB measured (the old code needed ~4.8 GB for 100 x 100)
     peak = tracemalloc.get_traced_memory()[1] / 1e6
     tracemalloc.stop()
-    assert peak < 120
+    assert peak < 400
 
 
 def test_streamed_run_memory(tmp_path):
@@ -49,7 +49,7 @@ def local_slopes(config):
 
 
 def test_geometric_springs_give_a_power_law_over_two_magnitude_units():
-    # default 100 x 100 x 100 years: b ~ 0.55-0.8 from Mc up to Mc + 3 (measured)
+    # default 250 x 250 x 100 years: b ~ 0.55-0.9 from Mc up to Mc + 2.5 (measured)
     stats, slopes = local_slopes(SimulationConfig())
     assert 0.5 < stats['b'].b < 1.0
     assert all(b < 1.0 for offset, b in slopes if offset <= 2.0)

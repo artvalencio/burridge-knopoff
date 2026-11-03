@@ -3,7 +3,7 @@ Simulation parameters.
 
 All quantities are SI, and every field name carries its unit (_m, _pa, _n_m,
 _kg_m3, ...), except the simulation schedule, which is in years (_years). The
-defaults describe a 200 km x 200 km fault patch loaded at the Japan Trench
+defaults describe a 500 km x 500 km fault patch loaded at the Japan Trench
 plate rate (9 cm/year). They are chosen to be mutually consistent (events
 occur every few years), not calibrated to a real fault.
 """
@@ -61,7 +61,8 @@ class SimulationConfig:
         shear_modulus_pa: for the seismic moment M0 = shear modulus x area x slip.
     Sensors
         n_sensors_x, n_sensors_y, sensor_height_m: sensor grid centred over the
-            blocks, at this height above the fault plane z = 0.
+            blocks, at this height above the fault plane z = 0 (default 25 x 25:
+            one sensor every 20 km over the 500 km patch).
     Schedule
         simulation_years: simulated time.
         sample_interval_years: interval of the sensor time-series.
@@ -73,8 +74,8 @@ class SimulationConfig:
             so the first years are dominated by system-wide events.
         seed: random seed of the heterogeneity (results are reproducible).
     """
-    n_blocks_x: int = 100
-    n_blocks_y: int = 100
+    n_blocks_x: int = 250
+    n_blocks_y: int = 250
     block_spacing_m: float = 2000.0
     seismogenic_thickness_m: float = 10_000.0
     rock_density_kg_m3: float = 2700.0
@@ -95,8 +96,8 @@ class SimulationConfig:
     plate_velocity_m_per_year: float = 0.09
     shear_modulus_pa: float = 3e10
 
-    n_sensors_x: int = 10
-    n_sensors_y: int = 10
+    n_sensors_x: int = 25
+    n_sensors_y: int = 25
     sensor_height_m: float = 5000.0
 
     simulation_years: float = 100.0

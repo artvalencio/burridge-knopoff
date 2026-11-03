@@ -9,7 +9,9 @@ from burridge_knopoff.config import SimulationConfig, SECONDS_PER_YEAR
 def test_defaults_are_valid_and_physical():
     cfg = SimulationConfig()
     cfg.validate()
-    assert cfg.n_blocks == 100 * 100 and cfg.n_sensors == 10 * 10
+    assert cfg.n_blocks == 250 * 250 and cfg.n_sensors == 25 * 25
+    # the fault patch is 500 km x 500 km
+    assert cfg.n_blocks_x * cfg.block_spacing_m >= 500e3 and cfg.n_blocks_y * cfg.block_spacing_m >= 500e3
     assert cfg.block_area_m2 == pytest.approx(2000.0 ** 2)
     assert cfg.block_mass_kg == pytest.approx(2700 * 2000.0 ** 2 * 10_000)
     assert cfg.plate_velocity_m_s == pytest.approx(0.09 / SECONDS_PER_YEAR)
@@ -41,7 +43,7 @@ def test_config_is_immutable_and_replaceable():
     cfg = SimulationConfig()
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.n_blocks_x = 3
-    assert dataclasses.replace(cfg, n_blocks_x=3).n_blocks == 300
+    assert dataclasses.replace(cfg, n_blocks_x=3).n_blocks == 3 * cfg.n_blocks_y
 
 
 def test_stiffnesses_follow_from_the_fault_geometry():

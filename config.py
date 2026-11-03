@@ -8,9 +8,9 @@ documented in burridge_knopoff/config.py (help(SimulationConfig)).
 from burridge_knopoff.config import SimulationConfig
 
 CONFIG = SimulationConfig(
-    # grid: 100 x 100 blocks, 2 km apart (a 200 km x 200 km fault patch)
-    n_blocks_x=100,
-    n_blocks_y=100,
+    # grid: 250 x 250 blocks, 2 km apart (a 500 km x 500 km fault patch)
+    n_blocks_x=250,
+    n_blocks_y=250,
     block_spacing_m=2000.0,
     seismogenic_thickness_m=10_000.0,   # with the density, gives the block mass
     rock_density_kg_m3=2700.0,
@@ -34,9 +34,9 @@ CONFIG = SimulationConfig(
     plate_velocity_m_per_year=0.09,     # Pacific plate at the Japan Trench, ~9 cm/year
     shear_modulus_pa=3e10,
 
-    # gravity sensors, centred over the blocks
-    n_sensors_x=10,
-    n_sensors_y=10,
+    # gravity sensors, centred over the blocks (25 x 25: one every 20 km)
+    n_sensors_x=25,
+    n_sensors_y=25,
     sensor_height_m=5000.0,
 
     # schedule

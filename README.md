@@ -4,23 +4,23 @@ A two-dimensional Burridge-Knopoff spring-block earthquake model, with an
 array of gravity sensors that record the change in gravitational potential
 caused by the motion of the fault.
 
-- 100 × 100 blocks (a 200 km × 200 km fault patch) loaded by a plate moving at
+- 250 × 250 blocks (a 500 km × 500 km fault patch) loaded by a plate moving at
   9 cm/year, with heterogeneous friction
-- event-driven integration: the default 100-year run takes about 10 s and
-  about 20 MB of memory
+- event-driven integration: the default 100-year run takes about 3 minutes and
+  about 130 MB of memory (a 100 × 100 grid: about 10 s)
 - an event catalogue with seismic moment and moment magnitude, and
   magnitude-frequency statistics (b-value, completeness, local slopes)
-- exact potential changes at a 10 × 10 sensor array 5 km above the fault
+- exact potential changes at a 25 × 25 sensor array (one every 20 km) 5 km above the fault
 - NPZ/CSV output, animation, event maps and magnitude-frequency plot
 - 126 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
 
-![Potential change before and after a Mw 7.4 event (default run)](docs/event_comparison.png)
+![Potential change before and after a Mw 7.1 event starting at the centre of the grid, (250, 248) km (default 500 km run)](docs/event_comparison_500km.png)
 
 ## Quick start
 
 ```bash
 pip install -r requirements.txt
-python main.py                       # defaults from config.py, about 40 s with plots
+python main.py                       # defaults from config.py, about 4-7 min with plots
 python main.py --nx 50 --ny 50 --years 50 --output small_run
 python main.py --help
 ```
@@ -109,12 +109,12 @@ unit; the documentation is `help(burridge_knopoff.SimulationConfig)`.
 
 | Group | Fields (defaults) |
 |---|---|
-| grid | `n_blocks_x`, `n_blocks_y` (100, 100), `block_spacing_m` (2000), `seismogenic_thickness_m` (10 km), `rock_density_kg_m3` (2700) → block mass 1.08·10¹⁴ kg |
+| grid | `n_blocks_x`, `n_blocks_y` (250, 250), `block_spacing_m` (2000), `seismogenic_thickness_m` (10 km), `rock_density_kg_m3` (2700) → block mass 1.08·10¹⁴ kg |
 | springs | derived from the geometry: coupling k_c = μ·H (3·10¹⁴ N/m), loading k_p = μ·L²/`loading_distance_m` (20 km → 6·10¹² N/m), so k_c/k_p = 50; `coupling_stiffness_n_m` / `loading_stiffness_n_m` override them |
 | friction | `static_friction_stress_pa` (10 MPa), `dynamic_friction_stress_pa` (7 MPa), `heterogeneity` (0.5), `redraw_thresholds` (True), `weakening_velocity_m_s` (None: off), `onset_drop` (0.2) |
 | coupling range | `interaction_range_blocks` (1: nearest neighbours), `interaction_exponent` (3) |
 | loading | `plate_velocity_m_per_year` (0.09), `shear_modulus_pa` (30 GPa, for the moment) |
-| sensors | `n_sensors_x`, `n_sensors_y` (10, 10), `sensor_height_m` (5000) |
+| sensors | `n_sensors_x`, `n_sensors_y` (25, 25), `sensor_height_m` (5000) |
 | schedule | `simulation_years` (100), `sample_interval_years` (0.01), `snapshot_interval_years` (1), `steps_per_period` (100), `spinup_years` (20, left out of the statistics), `seed` (0) |
 
 The coupling spring is the elastic stiffness of the slab between two blocks
@@ -160,6 +160,12 @@ Indexing convention: per-block arrays are row-major, block = row × n_blocks_x
 | memory | 4.8 GB for stored positions and velocities, tens of GB for the CSV export | 21 MB peak |
 | output | ~7 GB of CSV | 37 MB (data) + 2 MB (plots) |
 
+The default grid is now 250 × 250 blocks (500 km × 500 km) with 25 × 25 sensors:
+124,577 events in 100 years, 190–360 s on the same machine (measured spread),
+130 MB peak memory, 225 MB of data and 7 MB of plots. Per-event work includes
+a few O(n) steps (the next failure, the plate shift), so time grows faster
+than the number of blocks.
+
 What makes it fast:
 - exact jumps between events;
 - compiled slip dynamics for the slipping blocks only;
@@ -187,13 +193,17 @@ by maximum likelihood (Aki, 1965), and uses the truncated estimator of Page
 (1968) for finite windows. It also gives the magnitude of completeness Mc
 and local b-values in one-unit windows. Events in the first `spinup_years`
 are left out: every block starts at the same stress, so the first event
-ruptures the whole grid. For the default run (events after 20 years):
+ruptures the whole grid (Mw 8.7 at 11 years in the default run). For the default
+500 km run (events after 20 years):
 
-![Magnitude-frequency distribution of the default run](docs/magnitude_frequency.png)
+![Magnitude-frequency distribution of the default run](docs/magnitude_frequency_500km.png)
 
-- b = 0.66 ± 0.01 above Mc = 4.1 (17,142 events)
-- local b: 0.56 (Mw 4.1–5.1), 0.61, 0.66, 0.77, 0.81 (6.1–7.1), then 1.75: the
-  power law holds over about three magnitude units, up to the size of the grid
+- b = 0.66 ± 0.002 above Mc = 4.1 (106,127 events; largest Mw 7.65)
+- local b: 0.57 (Mw 4.1–5.1), 0.59, 0.69, 0.73, 0.87 (6.1–7.1), then 1.64 and
+  3.39: the power law holds over about three magnitude units, then is cut off.
+  The 200 km grid (100 × 100) gave the same b (0.66 above Mc = 4.1; local b
+  0.56–0.81, then 1.75): the 2.5× larger patch adds events, not a different
+  distribution
 
 Real faults typically show b ≈ 0.8–1.2. With the default friction and
 nearest-neighbour coupling, this model's b ≈ 0.6–0.8 is robust to the
@@ -260,6 +270,7 @@ burridge-knopoff/
 │   ├── visualization.py      # animation and plots
 │   └── cli.py                # command-line interface
 ├── tests/                    # pytest suite (golden_catalogue.json: golden run)
+├── 3d_model/PLAN.md          # plan: 3-D half-space model, Earth tides, tide comparison
 └── benchmarks/run.py         # timings and memory peaks
 ```
 
