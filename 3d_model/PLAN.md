@@ -602,6 +602,29 @@ The nonlinear-dynamics phases (7–8) depend only on the 2-D model and can run i
 | information measures on sparse, heavy-tailed event series are biased | equal-points encoding, surrogate thresholds, validation on `coupledlogistic` with known links; effect sizes rather than raw bits |
 | a common driver (tides, uniform loading) creates spurious synchrony and information flow | tide-removed residuals, no-tide null runs, and conditioning on the driver where the measure allows it |
 
+## 9. Status and first results
+
+Implemented on branch `implement-plan`: phases 1, 2, 6 (2-D), 7 and 8, and the
+experiment scripts of phase 9 (`3d_model/experiments/`). The 3-D model
+(phases 3-5) is not started: it needs a validated half-space dislocation
+solution (Okada, 1992, or triangular dislocations, e.g. the `cutde` package).
+
+Development-grid results (2-D, 100 km, 100 years after a 20-year spin-up):
+
+| Hypothesis | Result |
+|---|---|
+| H1, counts | supported: tides change the number of events by +20 [-88, 122] (0.3 %) against the zero-tide stepping control, and by at most ~1 % even amplified 1000x; b unchanged (0.686 vs 0.687). A first comparison against the exact-jump runs (A) showed +92: the control B is needed, because the model is chaotic and runs decorrelate |
+| H2, timing | supported: strong phase locking (Schuster p ~ 0) in every tidal condition, none in the null; no events in the lowest tidal-stress deciles. Moon-only locks more than Sun-only |
+| H3, gravity | supported: the co-seismic dg-Mw scaling is unchanged; the cumulative co-seismic change (+-250 uGal) differs by < 1 % |
+| H4, chaos | supported: lambda_1 ~ 2 / yr (deterministic 50 x 50), 25 / yr with per-block noise; predictability horizon 4-6 years, longer for larger events |
+| H5, dimension | supported: Kaplan-Yorke dimension ~ 0.15 x number of blocks (extensive chaos) |
+| H6, synchronisation | partly: regional phase locking decays with distance like the coupling; tides lock events to the tide (forced synchronisation) but do not increase regional synchrony |
+| H7, information flow | not supported at weekly resolution: no transfer entropy between regions (the coupling acts within events); tide-to-seismicity transfer entropy with short histories is inconclusive, while the Schuster test is unambiguous |
+
+Lessons: hourly checks at the step ends missed short tidal excursions (fixed by exact
+crossings inside each step); sparse event series need an explicit "no event" symbol
+for the information measures.
+
 ## References
 
 - Agnew, D. C. (2007). Earth tides. *Treatise on Geophysics*, vol. 3, 163–195.

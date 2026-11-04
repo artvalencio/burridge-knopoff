@@ -1,10 +1,12 @@
 """
 Information flow with the CaMI toolbox (cami >= 1.5; plan, section 6.7).
 
-Series are encoded by cami's symbolic encoding. Event-derived series are
-sparse and heavy-tailed, so the default is 'equal-points' partitions (equal
-numbers of samples per symbol), with log1p of moments; tau is fixed (1 bin)
-for reproducibility.
+Series are encoded with explicit divisions (divisions()): equal-population
+quantiles for ordinary series and, for sparse event series (at least half of
+the bins empty: moments or counts per bin), one symbol for "no event" and
+quantiles of the non-empty bins for the others. Equal-population partitions
+alone would collapse on the repeated zeros and see no information at all.
+Moments are taken as log1p; tau is fixed (1 bin) for reproducibility.
 
 - te_network: transfer entropy between every ordered pair of series, with
   surrogate significance (circular shifts, which keep each series' own
@@ -35,11 +37,35 @@ def prepare(series, log=True):
     return np.log1p(s) if log and np.all(s >= 0) else s
 
 
+def divisions(x, n_symbols):
+    """Symbol boundaries for x: n_symbols - 1 equal-population quantiles or, when at least
+    half of x is zero (sparse event series), a boundary just above zero followed by quantiles
+    of the positive values."""
+    x = np.asarray(x, dtype=float)
+    positive = x[x > 0]
+    if np.mean(x == 0) >= 0.5 and len(positive):
+        cuts = [0.5 * positive.min()]
+        if n_symbols > 2:
+            cuts += list(np.quantile(positive, np.arange(1, n_symbols - 1) / (n_symbols - 1)))
+        return np.unique(cuts)
+    return np.unique(np.quantile(x, np.arange(1, n_symbols) / n_symbols))
+
+
+def _options(x, y, kwargs):
+    opts = {**DEFAULTS, **kwargs}
+    n = opts.pop('n_symbols')
+    opts.pop('symbolic_type', None)
+    xd, yd = divisions(x, n), divisions(y, n)
+    if len(xd) != len(yd):           # cami needs the same alphabet for both
+        k = min(len(xd), len(yd))
+        xd, yd = divisions(x, k + 1)[:k], divisions(y, k + 1)[:k]
+    return dict(opts, x_divs=list(xd), y_divs=list(yd))
+
+
 def te_network(series, n_surrogates=19, alpha=0.05, seed=0, log=True, **kwargs):
     """Transfer entropy TE[i, j] from series[:, i] to series[:, j], its surrogate p-values and
     significance. series: (n_times, n_nodes). Constant series give zero and p = 1."""
     cami = _cami()
-    opts = {**DEFAULTS, **kwargs}
     X = np.column_stack([prepare(c, log) for c in np.asarray(series, dtype=float).T])
     n = X.shape[1]
     te = np.zeros((n, n))
@@ -50,7 +76,7 @@ def te_network(series, n_surrogates=19, alpha=0.05, seed=0, log=True, **kwargs):
             if i == j or not (varying[i] and varying[j]):
                 continue
             res = cami.surrogate_test(X[:, i], X[:, j], measure='transfer_entropy', n_surrogates=n_surrogates,
-                                      alpha=alpha, seed=seed + i * n + j, **opts)
+                                      alpha=alpha, seed=seed + i * n + j, **_options(X[:, i], X[:, j], kwargs))
             te[i, j], p[i, j] = res['value'], res['p_value']
     return dict(te=te, p=p, significant=p <= alpha)
 
@@ -77,14 +103,13 @@ def pair_flow(x, y, n_surrogates=0, seed=0, log=False, **kwargs):
     """Information flow between x and y: dict with te_xy, te_yx, cami_xy, cami_yx, mutual_info,
     directionality (> 0: net flow x -> y) and, with surrogates, p-values of te_xy and te_yx."""
     cami = _cami()
-    opts = {**DEFAULTS, **kwargs}
     x, y = prepare(x, log), prepare(y, log)
-    out = dict(cami.measures(x, y, **opts))
+    out = dict(cami.measures(x, y, **_options(x, y, kwargs)))
     if n_surrogates:
         out['p_xy'] = cami.surrogate_test(x, y, measure='transfer_entropy', n_surrogates=n_surrogates, seed=seed,
-                                          **opts)['p_value']
+                                          **_options(x, y, kwargs))['p_value']
         out['p_yx'] = cami.surrogate_test(y, x, measure='transfer_entropy', n_surrogates=n_surrogates,
-                                          seed=seed + 1, **opts)['p_value']
+                                          seed=seed + 1, **_options(y, x, kwargs))['p_value']
     return out
 
 

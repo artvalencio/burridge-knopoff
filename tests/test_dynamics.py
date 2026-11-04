@@ -50,6 +50,30 @@ def test_henon_dimension_and_exponent(henon):
     assert ly.kantz(henon, 2, 1, eps=0.01, theiler=5, max_steps=10, fit=(1, 6))['slope'] == pytest.approx(0.419, abs=0.04)
 
 
+def test_neighbour_search_backends_agree():
+    pts = np.random.default_rng(5).normal(size=(800, 3))
+    pts[10] = pts[11]                                              # a duplicate point
+    for maximum_norm in (False, True):
+        for exclude_zero in (False, True):
+            a = em._nearest(pts, 3, maximum_norm, exclude_zero, backend='numba')
+            pytest.importorskip('scipy')
+            b = em._nearest(pts, 3, maximum_norm, exclude_zero, backend='scipy')
+            np.testing.assert_allclose(a[1], b[1])
+            np.testing.assert_array_equal(a[0], b[0])
+
+
+def test_estimators_work_without_scipy(henon, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, 'scipy', None)               # import scipy now fails
+    monkeypatch.setitem(sys.modules, 'scipy.spatial', None)
+    fnn = em.false_nearest_neighbours(henon[:2000], 1, max_dim=3)
+    assert fnn[1] < 0.02
+    assert ly.rosenstein(henon[:2000], 2, 1, theiler=5, max_steps=12, fit=(0, 6))['slope'] == pytest.approx(0.419, abs=0.06)
+    assert ly.kantz(henon[:2000], 2, 1, eps=0.02, theiler=5, max_steps=10, fit=(1, 6))['slope'] == pytest.approx(0.419, abs=0.06)
+    e1, e2 = em.cao(henon[:2000], 1, max_dim=4)
+    assert e1[-1] > 0.9
+
+
 def test_lorenz_delay_dimension_and_exponent(lorenz):
     tau = em.first_minimum(em.auto_mutual_information(lorenz, 40))
     assert 8 <= tau <= 14                                          # ~0.2 time units
