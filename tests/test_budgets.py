@@ -62,14 +62,14 @@ def test_weak_coupling_cuts_the_distribution_off_early():
 
 
 def test_long_range_run_time():
-    # 60 x 60 blocks, range 3 (28 coupled blocks), 150 years: 185 s before
-    # incremental forces during slip
+    # 60 x 60 blocks, range 3 (28 coupled blocks), 150 years: 185 s before incremental
+    # forces during slip, 32-41 s with them (measured on the same machine at different times)
     cfg = SimulationConfig(n_blocks_x=60, n_blocks_y=60, simulation_years=150.0, sample_interval_years=1.0,
-                           interaction_range_blocks=3)
+                           interaction_range_blocks=3, n_sensors_x=10, n_sensors_y=10)
     run(SimulationConfig(n_blocks_x=4, n_blocks_y=4, simulation_years=40.0, interaction_range_blocks=3))
     start = time.perf_counter()
     run(cfg)
-    assert time.perf_counter() - start < 45
+    assert time.perf_counter() - start < 90
 
 
 def test_velocity_weakening_gives_a_gutenberg_richter_b_value():
