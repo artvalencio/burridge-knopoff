@@ -72,3 +72,13 @@ def test_observables_from_a_run():
     assert amps.shape == (len(times), 2) and patterns.shape == (2, 9) and 0 < var[0] <= 1
     centres = obs.region_centres(cfg)
     assert centres.shape == (4, 2) and centres[0, 0] < centres[1, 0] and centres[0, 1] < centres[2, 1]
+
+
+def test_sparse_event_series_keep_their_information():
+    # mostly empty bins: equal-population partitions would collapse on the zeros
+    rng = np.random.default_rng(4)
+    x = (rng.random(5000) < 0.05) * rng.lognormal(0, 1, 5000)
+    y = np.roll(x, 1) * (rng.random(5000) < 0.9)
+    assert list(inf.divisions(x, 2)) == [0.5 * x[x > 0].min()]
+    flow = inf.pair_flow(x, y, n_surrogates=19, n_symbols=2, symbolic_length=1)
+    assert flow['te_xy'] > 0.05 and flow['p_xy'] <= 0.05 and flow['te_yx'] < 0.2 * flow['te_xy']
