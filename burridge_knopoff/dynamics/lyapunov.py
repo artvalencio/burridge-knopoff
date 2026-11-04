@@ -299,13 +299,12 @@ def kantz(x, dim, tau, eps, theiler, max_steps, fit=(0, None), max_points=2000, 
     n = len(X) - max_steps
     rng = np.random.default_rng(seed)
     ref = rng.choice(n, size=min(max_points, n), replace=False)
-    from scipy.spatial import cKDTree
-    tree = cKDTree(X[:n])
     S = np.zeros(max_steps + 1)
     used = 0
+    index = np.arange(n)
     for i in ref:
-        nb = np.array(tree.query_ball_point(X[i], eps, p=np.inf))
-        nb = nb[np.abs(nb - i) > theiler] if len(nb) else nb
+        near = np.max(np.abs(X[:n] - X[i]), axis=1) <= eps      # neighbourhood (maximum norm)
+        nb = index[near & (np.abs(index - i) > theiler)]
         if len(nb) == 0:
             continue
         for k in range(max_steps + 1):

@@ -13,5 +13,6 @@ Nonlinear-dynamics analyses of the model (plan, section 6).
     surrogates       IAAFT, time-shift and interval-shuffle surrogates
     information      transfer entropy / CaMI analyses through the cami toolbox
 
-The estimators need scipy (neighbour searches); information needs cami >= 1.5.
+Neighbour searches use scipy's k-d tree when installed and a compiled direct search
+otherwise; information needs cami >= 1.5.
 """

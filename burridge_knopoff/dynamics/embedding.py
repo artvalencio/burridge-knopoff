@@ -14,6 +14,7 @@ Delay embedding and dimensions (Takens, 1981; Sauer et al., 1991).
 import math
 
 import numpy as np
+from numba import njit, prange
 
 
 def delay_vectors(x, dim, tau):
@@ -59,25 +60,64 @@ def first_minimum(values):
     return len(v) - 1
 
 
-def _tree(points):
+@njit(cache=True, parallel=True)
+def _nearest_brute(points, theiler, maximum_norm, exclude_zero):
+    # nearest neighbour of every point by direct search (numba, parallel over points)
+    n, dim = points.shape
+    idx = np.full(n, -1, dtype=np.int64)
+    dist = np.full(n, np.inf)
+    for i in prange(n):
+        best = np.inf
+        arg = -1
+        for j in range(n):
+            if abs(i - j) <= theiler:
+                continue
+            d = 0.0
+            for k in range(dim):
+                v = abs(points[i, k] - points[j, k])
+                if maximum_norm:
+                    if v > d:
+                        d = v
+                else:
+                    d += v * v
+            if exclude_zero and d == 0.0:
+                continue
+            if d < best:
+                best = d
+                arg = j
+        idx[i] = arg
+        dist[i] = best if maximum_norm else np.sqrt(best)
+    return idx, dist
+
+
+def _nearest(points, theiler=0, maximum_norm=False, exclude_zero=False, backend='auto'):
+    """Index and distance of the nearest neighbour of every point, excluding |i - j| <= theiler
+    (and, with exclude_zero, identical points). Euclidean or maximum norm. backend: 'scipy'
+    (k-d tree), 'numba' (direct search, no scipy needed) or 'auto' (scipy if installed)."""
+    points = np.ascontiguousarray(points, dtype=float)
+    if backend == 'auto':
+        try:
+            import scipy.spatial  # noqa: F401
+            backend = 'scipy'
+        except ImportError:
+            backend = 'numba'
+    if backend == 'numba':
+        return _nearest_brute(points, theiler, maximum_norm, exclude_zero)
     from scipy.spatial import cKDTree
-    return cKDTree(points)
-
-
-def _nearest(points, theiler=0):
-    """Index and distance of the nearest neighbour of every point, excluding |i - j| <= theiler."""
-    tree = _tree(points)
-    k = min(len(points), 2 * theiler + 3)
+    tree = cKDTree(points)
+    n = len(points)
+    k = min(n, 2 * theiler + 3)
+    rows = np.arange(n)
     while True:
-        dist, idx = tree.query(points, k=k)
-        own = np.arange(len(points))[:, None]
-        ok = np.abs(idx - own) > theiler
-        ok &= np.isfinite(dist)
-        if np.all(ok.any(axis=1)) or k >= len(points):
+        dist, idx = tree.query(points, k=k, p=np.inf if maximum_norm else 2)
+        ok = (np.abs(idx - rows[:, None]) > theiler) & np.isfinite(dist)
+        if exclude_zero:
+            ok &= dist > 0
+        if np.all(ok.any(axis=1)) or k >= n:
             first = np.argmax(ok, axis=1)
-            rows = np.arange(len(points))
-            return idx[rows, first], dist[rows, first]
-        k = min(len(points), 2 * k)
+            found = ok[rows, first]
+            return np.where(found, idx[rows, first], -1), np.where(found, dist[rows, first], np.inf)
+        k = min(n, 2 * k)
 
 
 def false_nearest_neighbours(x, tau, max_dim=8, rtol=15.0, atol=2.0, theiler=0):
@@ -104,14 +144,7 @@ def cao(x, tau, max_dim=8, theiler=0):
     for dim in range(1, max_dim + 2):
         X = delay_vectors(x, dim + 1, tau)
         base = X[:, :dim]
-        tree = _tree(base)
-        k = min(len(base), 2 * theiler + 3)
-        dist, idx = tree.query(base, k=k, p=np.inf)
-        own = np.arange(len(base))[:, None]
-        ok = (np.abs(idx - own) > theiler) & (dist > 0)
-        first = np.argmax(ok, axis=1)
-        rows = np.arange(len(base))
-        j, d = idx[rows, first], dist[rows, first]
+        j, d = _nearest(base, theiler, maximum_norm=True, exclude_zero=True)
         d_next = np.maximum(np.abs(X[:, :dim + 1] - X[j, :dim + 1]).max(axis=1), d)
         a.append(np.mean(d_next / np.maximum(d, 1e-300)))
         estar.append(np.mean(np.abs(X[:, dim] - X[j, dim])))
