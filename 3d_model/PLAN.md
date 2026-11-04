@@ -3,7 +3,7 @@
 Goals:
 
 1. A **3-D model**: the fault becomes a dipping surface in a 3-D elastic half-space, with depth, free-surface effects, vertical deformation and realistic co-seismic gravity changes.
-2. **Earth tides** (Moon and Sun) in both the 2-D and the 3-D model. Each block feels the tidal **force** (shear driving it along its slip direction, plus the direct body force) and the tidal **distension** (extension normal to the fault, which unclamps it and lowers its friction). The interseismic integration then advances in **steps of about 1 hour**.
+2. **Earth tides** (Moon and Sun) in both the 2-D and the 3-D model. Each block feels the tidal **force** (shear driving it along its slip direction, plus the direct body force) and the tidal **distension** (extension normal to the fault, which unclamps it and lowers its friction). The interseismic integration then advances in **steps of at most 1 hour** (shorter steps are allowed).
 3. A **comparison with and without tides**, for both models, of the number of events and of the co-seismic gravity changes.
 4. An **animation of pre-seismic gravity changes**: for a chosen event, the map of gravity relative to one year before it (with tides: the gravity residuals, tides removed), one frame per hour up to the event (§5).
 5. A **nonlinear-dynamics study** of both models (§6): Lyapunov exponents and predictability, attractor reconstruction, recurrence quantification, synchronisation, and information flow (mutual information, transfer entropy, CaMI), with and without tides.
@@ -59,7 +59,7 @@ The cost grows faster than the number of blocks because every event does O(N) wo
 
 The tidal Coulomb force on block i is then C_i(t) = A[τ_i(t) + μ_s σ_n,i(t)] + m ∇W·s. Strength and dynamic friction both scale with normal stress, so a static coefficient μ_s = 0.6 defines an effective normal stress σ_n,eff = F_s/(μ_s A) ≈ 16.7 MPa. The static strength then shifts by μ_s σ_n A and the dynamic friction by μ_d σ_n A, with μ_d = μ_s F_d/F_s = 0.42.
 
-**Spatial representation.** The tide varies smoothly across a 500 km region (≈ 4.5° of arc, with ~5–10 % amplitude and phase changes). Each hour, the stress tensor is evaluated at a 5 × 5 grid of control points and least-squares fitted per component as c₀(t) + c_x(t)·x + c_y(t)·y. Mode `uniform` keeps only c₀ (the domain centre); mode `linear` is the default. A test bounds the quadratic residual at < 2 % of the amplitude.
+**Spatial representation.** The tide varies smoothly across a 500 km region (≈ 4.5° of arc, with ~5–10 % amplitude and phase changes). Each hour, the stress tensor is evaluated at a 3 × 3 grid of control points and least-squares fitted per component as c₀(t) + c_x(t)·x + c_y(t)·y. Mode `uniform` keeps only c₀ (the domain centre); mode `linear` is the default. A test bounds the quadratic residual at < 2 % of the amplitude.
 
 **New config fields** (all off by default; tides off ⇒ today's code path):
 
@@ -69,7 +69,7 @@ The tidal Coulomb force on block i is then C_i(t) = A[τ_i(t) + μ_s σ_n,i(t)] 
 | `tide_bodies` | `('moon', 'sun')` | bodies included |
 | `tide_stress`, `tide_body_force` | `True`, `True` | the "distension"/stress and direct-force terms, switchable separately |
 | `tide_scale` | `1.0` | amplification factor for sensitivity runs (0 = hourly stepping with no tide) |
-| `tide_step_hours` | `1.0` | interseismic step |
+| `tide_step_hours` | `1.0` | largest interseismic step (smaller values are allowed) |
 | `tide_spatial` | `'linear'` | `'uniform'` or `'linear'` |
 | `epoch_utc` | `'2000-01-01T12:00:00'` | absolute time of t = 0 |
 | `centre_latitude_deg`, `centre_longitude_deg` | 38.3, 143.0 | domain centre |
@@ -84,7 +84,7 @@ The 2-D block grid maps to geography in a local tangent plane: x points along th
 | Test | Check |
 |---|---|
 | ephemerides | Meeus worked examples 25.a (Sun) and 47.a (Moon) reproduced to their stated precision; optional cross-check against `skyfield` when installed (skipped otherwise) |
-| potential | degree-2 term harmonic (finite-difference Laplacian ≈ 0); Moon/Sun ratio of maximum W₂ ≈ 2.2 at mean distances |
+| potential | degree-2 term harmonic (finite-difference Laplacian ≈ 0); Moon/Sun ratio of the tide-raising force GM/d³ ≈ 2.2 at mean distances (the ratio of the maxima is ~2.6, because of perigee) |
 | spectrum | harmonic least-squares fit of a 1-year hourly series at one site recovers the main constituent ratios: M2/S2 ≈ 2.15, K1/O1 ≈ 1.41 (Cartwright & Edden, 1973), within 3 % |
 | strain | areal strain equals (2h₂ − 6l₂)W/(ga); σ_rr = 0; strain amplitude 10⁻⁸–10⁻⁷ at mid-latitude |
 | stress | Coulomb amplitude on the default fault in the kPa range; resolved tractions invariant to adding a pressure when μ_s = 0 |
@@ -92,11 +92,11 @@ The 2-D block grid maps to geography in a local tangent plane: x points along th
 
 ### 2.3 Hourly interseismic integration (2-D)
 
-Without tides the loop jumps exactly to the next failure. With tides each block's driving force is F_i + k_p v_p t + C_i(t), and its strength is S_i − μ_s A σ_n,i(t). This is no longer linear in t, so the loop steps the interseismic period in **Δt = 1 h** (`tide_step_hours`):
+Without tides the loop jumps exactly to the next failure. With tides each block's driving force is F_i + k_p v_p t + C_i(t), and its strength is S_i − μ_s A σ_n,i(t). This is no longer linear in t, so the loop steps the interseismic period in **steps of at most 1 h** (`tide_step_hours`; shorter steps make the interpolated tide closer to the exact one):
 
 1. At the start of each hour compute c(t) (cached per year chunk: 9 coefficients × 8,766 hours).
 2. Check failure: max_i [D_i + C_i(t)] > 0, where D_i = F_i − S_i is maintained as today. In `uniform` mode this is O(1) per hour, because the argmax is fixed between events. In `linear` mode the check runs only over a *candidate set* (blocks within the largest spatial tidal variation of the current maximum), rebuilt after each event in O(N).
-3. When a step crosses zero, locate the failure time inside the hour by bisection to 1 s. The tide is interpolated by cubic Hermite from the hourly values and their analytic derivatives (error ~(ωΔt)⁴/384 ≈ 0.02 % for M2).
+3. Inside each step the tide is a Catmull-Rom cubic of the tabulated values, so each candidate's margin is a cubic in time. Its first crossing is found exactly (critical points, then bisection on the monotone pieces), so even a failure that lasts less than a step is not missed. (Implementation note: checking only the step ends missed such failures by one tidal cycle.) The interpolation error at 1-hour steps is ~0.5 % of the tidal amplitude; 10-minute steps reproduce an exact sinusoid to within a minute.
 4. During an event (seconds), freeze the tide at its start value. The slip kernel gets a per-block bias C_i and shifted thresholds; this changes the kernel's arguments, not its algorithm.
 5. Optional exact skip-ahead: if the gap exceeds the largest possible tidal swing (2 max|C|), jump straight to the time when it no longer does. A test checks that results are identical to plain hourly stepping. At scale 1 the swing equals ~260 h of tectonic loading, so most of the time is still stepped hourly.
 

@@ -56,6 +56,10 @@ class SimulationConfig:
         redraw_thresholds: draw a new strength for a block after each slip
             (annealed disorder; never below the force it holds when it stops)
             instead of keeping it fixed (quenched).
+        rng_mode: 'global' (one random stream, default) or 'per-block': the k-th
+            strength of block i depends only on (seed, i, k), so that nearby
+            trajectories share their noise (Lyapunov exponents of the noise-driven
+            model; see dynamics).
     Loading and moment
         plate_velocity_m_per_year: plate rate.
         shear_modulus_pa: for the seismic moment M0 = shear modulus x area x slip.
@@ -63,6 +67,12 @@ class SimulationConfig:
         n_sensors_x, n_sensors_y, sensor_height_m: sensor grid centred over the
             blocks, at this height above the fault plane z = 0 (default 25 x 25:
             one sensor every 20 km over the 500 km patch).
+        gravity_map_min_magnitude: events at least this large keep their full
+            co-seismic gravity and potential maps (the others only summaries).
+    Observables for the dynamics analyses
+        n_regions_x, n_regions_y: the grid is split into these regions; the moment
+            each event releases in each region is recorded (regional_moment).
+        record_energy: record the elastic energy at the sample times.
     Earth tides (see tides.py)
         tides: Moon and Sun tidal forcing; the time between events is then
             stepped every tide_step_hours instead of jumped exactly. Off by default.
@@ -111,6 +121,7 @@ class SimulationConfig:
     weakening_velocity_m_s: float = None
     onset_drop: float = 0.2
     redraw_thresholds: bool = True
+    rng_mode: str = 'global'
 
     plate_velocity_m_per_year: float = 0.09
     shear_modulus_pa: float = 3e10
@@ -118,6 +129,10 @@ class SimulationConfig:
     n_sensors_x: int = 25
     n_sensors_y: int = 25
     sensor_height_m: float = 5000.0
+    gravity_map_min_magnitude: float = 6.5
+    n_regions_x: int = 5
+    n_regions_y: int = 5
+    record_energy: bool = False
 
     tides: bool = False
     tide_bodies: str = 'moon,sun'
@@ -235,6 +250,10 @@ class SimulationConfig:
                 raise ValueError('weakening_velocity_m_s must be positive or None, got %r' % self.weakening_velocity_m_s)
             if not 0 < self.onset_drop <= 1:
                 raise ValueError('onset_drop must be in (0, 1] with velocity weakening, got %r' % self.onset_drop)
+        if self.rng_mode not in ('global', 'per-block'):
+            raise ValueError("rng_mode must be 'global' or 'per-block', got %r" % self.rng_mode)
+        if not (self.n_regions_x >= 1 and self.n_regions_y >= 1):
+            raise ValueError('n_regions_x and n_regions_y must be >= 1')
         if self.tides:
             bodies = [b.strip() for b in self.tide_bodies.split(',') if b.strip()]
             if not bodies or any(b not in ('moon', 'sun') for b in bodies):

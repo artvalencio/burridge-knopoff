@@ -16,6 +16,7 @@ import numpy as np
 from matplotlib.colors import Normalize
 
 from . import analysis, grid
+from .config import SECONDS_PER_YEAR
 
 CMAP = 'RdBu_r'
 LABEL = 'Gravitational potential change (J/kg)'
@@ -148,6 +149,89 @@ def magnitude_frequency(result, path):
     if path is None:
         return fig
     fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path
+
+
+def preseismic_animation(window, path, tide_removal='model', fps=30, writer=None, percentile=100.0,
+                         fade_days=7.0, dpi=80):
+    """Animation of a preseismic.PreseismicWindow: one frame per recorded time.
+
+    One map: the gravity change since the first frame; with tides, the gravity residuals
+    (tides removed by `tide_removal`, 'model' or 'fit'). Below it, the series at the sensor
+    nearest the hypocentre with a moving cursor (and, with tides, the tidal Coulomb stress
+    at the hypocentre). The colour scale is fixed for the whole window (the `percentile` of
+    |values| over all frames). The target hypocentre is a star; earlier events appear as
+    circles when they happen, sized by magnitude and fading over fade_days.
+
+    Writes MP4 with ffmpeg (required for path ending in .mp4; writer overrides, e.g. 'pillow'
+    for a GIF in tests). With path=None returns (fig, anim, update)."""
+    cfg = window.config
+    tides = window.tidal_gravity_abs is not None
+    values = (window.residual(tide_removal) if tides else window.gravity) * 1e8      # microGal
+    scale = float(np.percentile(np.abs(values), percentile)) if values.size else 0.0
+    norm = Normalize(vmin=-scale if scale > 0 else -1e-30, vmax=scale if scale > 0 else 1e-30)
+    fig = plt.figure(figsize=(8, 9))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.25)
+    ax = fig.add_subplot(gs[0])
+    x, y = _sensor_mesh(cfg)
+    mesh = ax.pcolormesh(x, y, grid.as_grid(values[0], cfg, sensors=True), cmap=CMAP, norm=norm, shading='nearest',
+                         animated=True)
+    ax.set_xlabel('x (km)')
+    ax.set_ylabel('y (km)')
+    ax.set_aspect('equal')
+    label = ('Gravity residual since t0, tides removed (%s) (µGal)' % tide_removal if tides
+             else 'Gravity change since t0 (µGal)')
+    fig.colorbar(mesh, ax=ax, label=label, shrink=0.85)
+    hx, hy = (c / 1000 for c in window.event.hypocentre_xy(cfg))
+    ax.plot(hx, hy, '*', color='yellow', markersize=18, markeredgecolor='black', zorder=5)
+    ev_t = np.array([e.start_years * SECONDS_PER_YEAR for __, e in window.events])
+    ev_xy = np.array([e.hypocentre_xy(cfg) for __, e in window.events]).reshape(-1, 2) / 1000
+    ev_size = np.array([8 + 6 * max(e.magnitude - 4, 0) ** 2 for __, e in window.events])
+    dots = ax.scatter(ev_xy[:, 0] if len(ev_xy) else [], ev_xy[:, 1] if len(ev_xy) else [], s=ev_size if len(ev_size) else [],
+                      facecolors='none', edgecolors='black', linewidths=1.0, animated=True, zorder=4)
+    title = ax.text(0.5, 1.02, '', transform=ax.transAxes, ha='center', va='bottom', fontsize=11, animated=True)
+    strip = fig.add_subplot(gs[1])
+    days = window.time_to_event_s / 86400.0
+    s = window.nearest_sensor()
+    strip.plot(days, values[:, s], color='tab:blue', lw=0.8)
+    strip.set_ylabel('sensor %d (µGal)' % s, color='tab:blue')
+    strip.set_xlabel('time to the event (days)')
+    strip.set_xlim(days[0], days[-1] if days[-1] > days[0] else days[0] + 1)
+    if tides and window.tidal_coulomb_pa is not None:
+        twin = strip.twinx()
+        twin.plot(days, window.tidal_coulomb_pa / 1e3, color='tab:orange', lw=0.5, alpha=0.7)
+        twin.set_ylabel('tidal Coulomb (kPa)', color='tab:orange')
+    cursor = strip.axvline(days[0], color='black', lw=1.0, animated=True)
+    fade_s = fade_days * 86400.0
+
+    def update(k):
+        t = window.frame_times_s[k]
+        mesh.set_array(grid.as_grid(values[k], cfg, sensors=True).ravel())
+        if len(ev_t):
+            age = t - ev_t
+            alpha = np.where((age >= 0) & (age < fade_s), 1.0 - age / fade_s, 0.0)
+            colours = np.zeros((len(ev_t), 4))
+            colours[:, 3] = alpha
+            dots.set_edgecolors(colours)
+        lead = window.frame_times_s[-1] - t
+        n_so_far = int(np.count_nonzero(ev_t <= t)) if len(ev_t) else 0
+        title.set_text('Mw %.2f event: t - t_event = -%d d %02d h   (%d earlier events in the window)'
+                       % (window.event.magnitude, lead // 86400, (lead % 86400) // 3600, n_so_far))
+        cursor.set_xdata([days[k], days[k]])
+        return mesh, dots, title, cursor
+
+    update(0)
+    anim = animation.FuncAnimation(fig, update, frames=len(window.frame_times_s), interval=1000 / fps, blit=True)
+    if path is None:
+        return fig, anim, update
+    if writer is None:
+        if not _ffmpeg_available():
+            plt.close(fig)
+            raise RuntimeError('the pre-seismic animation needs FFmpeg (%d frames; a GIF would be too large)'
+                               % len(window.frame_times_s))
+        writer = 'ffmpeg'
+    anim.save(path, writer=writer, fps=fps, dpi=dpi)
     plt.close(fig)
     return path
 

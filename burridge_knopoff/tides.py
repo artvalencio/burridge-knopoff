@@ -46,7 +46,7 @@ Tidal gravity at the sensors (change of the downward gravity, m/s^2):
 Spatial representation
 ----------------------
 The tide varies smoothly over the model area. Each quantity is evaluated at a
-5 x 5 grid of control points and fitted as c0 + cx x + cy y in the local
+3 x 3 grid of control points and fitted as c0 + cx x + cy y in the local
 model coordinates (origin at the centre of the block grid); with
 tide_spatial='uniform' only the centre value is used. HourlyTide holds these
 coefficients every tide_step_hours and interpolates them in between.
@@ -267,7 +267,7 @@ class TideModel:
     Coordinates are relative to grid_centre(config).
     """
 
-    n_control = 5
+    n_control = 3
 
     def __init__(self, config):
         self.config = config
