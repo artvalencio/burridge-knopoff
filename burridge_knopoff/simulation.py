@@ -205,17 +205,20 @@ class Runner:
             return self.model.time_to_failure()
         return self.model.time_to_failure_tidal(self.hourly, min(limit_s, self.end_s))
 
-    def tide_at(self, t_s, x_c, y_c):
+    def tide_at(self, t_s, x_c, y_c, coefficients=None):
         """Tidal stresses at (x_c, y_c) relative to the grid centre at time t_s: driving
         stress, normal stress, Coulomb stress (Pa), its rate (Pa/h) and the semidiurnal
-        phase (rad)."""
-        from .tides import evaluate
+        phase (rad). coefficients: hourly.at([t - 60, t, t + 60], ('drive', 'normal',
+        'coulomb')) if already computed."""
         area = self.config.block_area_m2
-        drive, normal, coulomb, __ = self.hourly.at(np.array([t_s - 60.0, t_s, t_s + 60.0]))
-        values = [float(evaluate(c, x_c, y_c)[0]) for c in (drive[1], normal[1], coulomb[1])]
-        rate = (float(evaluate(coulomb[2], x_c, y_c)[0]) - float(evaluate(coulomb[0], x_c, y_c)[0])) / 120.0 * 3600.0
+        if coefficients is None:
+            coefficients = self.hourly.at(np.array([t_s - 60.0, t_s, t_s + 60.0]), ('drive', 'normal', 'coulomb'))
+        drive, normal, coulomb = coefficients
+        at = lambda c: c[0] + c[1] * x_c + c[2] * y_c
+        rate = (at(coulomb[2]) - at(coulomb[0])) / 120.0 * 3600.0
         phase = math.remainder(float(np.interp(t_s, self._phase_times, self._phase)), 2 * math.pi)
-        return values[0] / area, values[1] / area, values[2] / area, rate / area, phase
+        return (float(at(drive[1])) / area, float(at(normal[1])) / area, float(at(coulomb[1])) / area,
+                float(rate) / area, phase)
 
     def step(self, limit_s):
         """Runs the next event if it starts by limit_s and returns it; otherwise loads the
@@ -231,9 +234,10 @@ class Runner:
         start_s = model.time_s
         tide = {}
         if self.hourly is not None:
-            drive, normal, __, __ = self.hourly.at(start_s)
-            model.set_tide(drive[0], normal[0])
-            values = self.tide_at(start_s, model.x_centre[hypocentre], model.y_centre[hypocentre])
+            coefficients = self.hourly.at(np.array([start_s - 60.0, start_s, start_s + 60.0]),
+                                          ('drive', 'normal', 'coulomb'))
+            model.set_tide(coefficients[0][1], coefficients[1][1])
+            values = self.tide_at(start_s, model.x_centre[hypocentre], model.y_centre[hypocentre], coefficients)
             tide = dict(zip(('tide_shear_pa', 'tide_normal_pa', 'tide_coulomb_pa', 'tide_coulomb_rate_pa_h',
                              'tide_phase_rad'), values))
         result = model.slip(hypocentre)

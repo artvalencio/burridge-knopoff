@@ -58,11 +58,12 @@ def tidal_series(config):
     return times, hourly.coulomb[:, 0] / config.block_area_m2, np.unwrap(phase)
 
 
-def tidal_statistics(result, spinup_years=None, min_magnitude=None, n_bins=10):
+def tidal_statistics(result, spinup_years=None, min_magnitude=None, n_bins=10, series=None):
     """Schuster p-value and rate vs stress of a result's events after the spin-up.
 
     Event phases come from the configuration's tidal series (so a run without tides gives
-    the null control). Returns a dict: n, schuster_p, rate (see rate_vs_stress)."""
+    the null control); `series` passes a precomputed tidal_series(config) to reuse it across
+    runs of the same geometry. Returns a dict: n, schuster_p, rate (see rate_vs_stress)."""
     cfg = result.config
     spinup = cfg.spinup_years if spinup_years is None else spinup_years
     cat = result.catalogue
@@ -70,7 +71,7 @@ def tidal_statistics(result, spinup_years=None, min_magnitude=None, n_bins=10):
     if min_magnitude is not None:
         keep &= cat['magnitude'] >= min_magnitude
     t_events = cat['start_years'][keep] * SECONDS_PER_YEAR
-    times, coulomb, phase = tidal_series(cfg)
+    times, coulomb, phase = tidal_series(cfg) if series is None else series
     phases = np.interp(t_events, times, phase)
     inside = (times >= spinup * SECONDS_PER_YEAR)
     return dict(n=int(keep.sum()), schuster_p=schuster_p(phases),

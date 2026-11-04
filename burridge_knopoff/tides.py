@@ -311,16 +311,24 @@ class HourlyTide:
     """The coefficients of TideModel every tide_step_hours from t = 0 to beyond end_s,
     with Catmull-Rom (cubic) interpolation in between."""
 
+    _cache = {}       # recent tables, keyed by the configuration without its seed (ensembles reuse them)
+    cache_size = 2
+
     def __init__(self, config, end_s, chunk_steps=8766):
+        import dataclasses
         self.config = config
         self.model = TideModel(config)
         self.step_s = config.tide_step_hours * 3600.0
         n = int(math.ceil(end_s / self.step_s)) + 3
         self.times = np.arange(n) * self.step_s
-        parts = [self.model.coefficients(self.times[k:k + chunk_steps]) for k in range(0, n, chunk_steps)]
-        self.drive = np.concatenate([p['drive'] for p in parts])
-        self.normal = np.concatenate([p['normal'] for p in parts])
-        self.gravity = np.concatenate([p['gravity'] for p in parts])
+        key = (dataclasses.replace(config, seed=0), n)
+        if key not in HourlyTide._cache:
+            parts = [self.model.coefficients(self.times[k:k + chunk_steps]) for k in range(0, n, chunk_steps)]
+            tables = tuple(np.concatenate([p[name] for p in parts]) for name in ('drive', 'normal', 'gravity'))
+            while len(HourlyTide._cache) >= HourlyTide.cache_size:
+                HourlyTide._cache.pop(next(iter(HourlyTide._cache)))
+            HourlyTide._cache[key] = tables
+        self.drive, self.normal, self.gravity = HourlyTide._cache[key]
         mus = config.friction_coefficient
         self.coulomb = self.drive + mus * self.normal          # force against the static strength
 
@@ -334,10 +342,10 @@ class HourlyTide:
         return 0.5 * (2 * p1 + (p2 - p0) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
                       + (3 * p1 - p0 - 3 * p2 + p3) * u ** 3)
 
-    def at(self, t_s):
-        """Interpolated coefficients (drive, normal, coulomb, gravity), each (len(t), 3)."""
-        return (self._interp(self.drive, t_s), self._interp(self.normal, t_s), self._interp(self.coulomb, t_s),
-                self._interp(self.gravity, t_s))
+    def at(self, t_s, series=('drive', 'normal', 'coulomb', 'gravity')):
+        """Interpolated coefficients of the named series (default: drive, normal, coulomb,
+        gravity), each (len(t), 3)."""
+        return tuple(self._interp(getattr(self, name), t_s) for name in series)
 
     def max_spatial_variation(self, x_extent, y_extent):
         """Largest |cx x + cy y| of the Coulomb force over the run and the area (N)."""
