@@ -11,13 +11,16 @@ requires-python = ">=3.9"
 dependencies = ["numpy>=1.22", "numba>=0.56", "matplotlib>=3.5", "tqdm>=4.40"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "mpmath"]
+# nonlinear-dynamics analyses (burridge_knopoff.dynamics)
+dynamics = ["scipy>=1.5", "cami @ git+https://github.com/artvalencio/cami-python",
+            "coupledlogistic @ git+https://github.com/artvalencio/coupledlogistic"]
 
 [project.scripts]
 burridge-knopoff = "burridge_knopoff.cli:main"
 
 [tool.setuptools]
-packages = ["burridge_knopoff"]
+packages = ["burridge_knopoff", "burridge_knopoff.dynamics"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
