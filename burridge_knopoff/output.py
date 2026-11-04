@@ -6,6 +6,7 @@ save_results writes to a directory:
     results.npz              everything, binary (reload with load_results)
     events.csv               the event catalogue (events.CATALOGUE_COLUMNS)
     sensor_potentials.csv    time_years, sensor_0 ... sensor_{n-1}   (J/kg)
+    sensor_gravity.csv       time_years, sensor_0 ... sensor_{n-1}   (microGal, downward gravity change)
     sensor_positions.csv     sensor, x_m, y_m, z_m
     block_positions.csv      block, row, col, x_m, y_m               (reference grid)
     block_displacements.csv  time_years, block_0 ... (m)    only with block_csv=True
@@ -45,7 +46,7 @@ def save_results(result, directory, csv_files=True, block_csv=False):
              times_years=result.times_years, potentials=np.asarray(result.potentials),
              snapshot_years=result.snapshot_years, displacements=np.asarray(result.displacements),
              catalogue=result.catalogue, final_displacement=result.final_displacement,
-             dissipated_energy_j=result.dissipated_energy_j)
+             dissipated_energy_j=result.dissipated_energy_j, **_optional_arrays(result))
     if not csv_files:
         return
     table = result.catalogue
@@ -57,6 +58,10 @@ def save_results(result, directory, csv_files=True, block_csv=False):
     _write_table(os.path.join(directory, 'sensor_potentials.csv'),
                  ['time_years'] + ['sensor_%d' % k for k in range(cfg.n_sensors)],
                  _with_time(result.times_years, pots))
+    if result.gravity is not None:
+        _write_table(os.path.join(directory, 'sensor_gravity.csv'),
+                     ['time_years'] + ['sensor_%d' % k for k in range(cfg.n_sensors)],
+                     _with_time(result.times_years, _Scaled(result.gravity, 1e8)))
     sensors = grid.sensor_positions(cfg)
     _write_table(os.path.join(directory, 'sensor_positions.csv'), ['sensor', 'x_m', 'y_m', 'z_m'],
                  np.column_stack([np.arange(cfg.n_sensors), sensors]), fmt='%.10g')
@@ -68,6 +73,27 @@ def save_results(result, directory, csv_files=True, block_csv=False):
         _write_table(os.path.join(directory, 'block_displacements.csv'),
                      ['time_years'] + ['block_%d' % k for k in range(cfg.n_blocks)],
                      _with_time(result.snapshot_years, result.displacements), fmt='%.9g')
+
+
+OPTIONAL_ARRAYS = ('gravity', 'gravity_map_events', 'gravity_map_potential', 'gravity_map_gravity',
+                   'tide_times_s', 'tide_coulomb_pa', 'regional_moment', 'elastic_energy')
+
+
+def _optional_arrays(result):
+    return {name: np.asarray(getattr(result, name)) for name in OPTIONAL_ARRAYS if getattr(result, name) is not None}
+
+
+class _Scaled:
+    """values[chunk] * factor, chunk by chunk."""
+
+    def __init__(self, values, factor):
+        self.values, self.factor = values, factor
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, chunk):
+        return np.asarray(self.values[chunk], dtype=float) * self.factor
 
 
 class _with_time:
@@ -89,8 +115,10 @@ def load_results(directory):
         cfg = SimulationConfig(**json.loads(str(data['config'])))
         table = data['catalogue']
         fields = [f.name for f in dataclasses.fields(ev.Event)]
-        events = [ev.Event(**{name: row[name].item() for name in fields}) for row in table]
+        present = [name for name in fields if name in (table.dtype.names or ())]  # older files lack some
+        events = [ev.Event(**{name: row[name].item() for name in present}) for row in table]
+        optional = {name: data[name] for name in OPTIONAL_ARRAYS if name in data.files}
         return SimulationResult(config=cfg, times_years=data['times_years'], potentials=data['potentials'],
                                 snapshot_years=data['snapshot_years'], displacements=data['displacements'],
                                 events=events, final_displacement=data['final_displacement'],
-                                dissipated_energy_j=float(data['dissipated_energy_j']))
+                                dissipated_energy_j=float(data['dissipated_energy_j']), **optional)

@@ -18,6 +18,14 @@ term is evaluated in a cancellation-free form:
 with a = |d - u_new e_x|, b = |d - u_old e_x| and d = r_s - r_b. The same
 formula updates the potentials incrementally after an event, touching only
 the blocks that slipped (cost: sensors x slipped blocks).
+
+Gravity. A gravimeter measures the downward gravity G m sum_b d_z / r^3 (the
+sensors are above the blocks, d_z > 0). Its change when a block moves is
+G m d_z (1/a^3 - 1/b^3), evaluated in the same cancellation-free way,
+
+    1/a^3 - 1/b^3 = (b - a)(a^2 + a b + b^2) / (a^3 b^3),
+
+sharing b - a with the potential (gravity_change, update_blocks(..., delta_g)).
 """
 import numpy as np
 from numba import njit
@@ -27,11 +35,13 @@ from .config import G
 
 
 @njit(cache=True)
-def _change_kernel(delta, sensors, blocks, indices, u_old, u_new, gm):
-    # adds -G m sum_k (1/a - 1/b) for blocks indices[k] moving from u_old[k] to
-    # u_new[k] (compact arrays aligned with indices; see module docstring)
+def _change_kernel(delta, delta_g, sensors, blocks, indices, u_old, u_new, gm, with_gravity):
+    # adds -G m sum_k (1/a - 1/b) to delta and (with_gravity) G m sum_k d_z (1/a^3 - 1/b^3)
+    # to delta_g, for blocks indices[k] moving from u_old[k] to u_new[k] (compact arrays
+    # aligned with indices; see module docstring)
     for s in range(sensors.shape[0]):
         acc = 0.0
+        acc_g = 0.0
         for k in range(indices.shape[0]):
             b = indices[k]
             du = u_new[k] - u_old[k]
@@ -43,8 +53,14 @@ def _change_kernel(delta, sensors, blocks, indices, u_old, u_new, gm):
             rest = dy * dy + dz * dz
             a = np.sqrt((dx - u_new[k]) ** 2 + rest)
             bb = np.sqrt((dx - u_old[k]) ** 2 + rest)
-            acc += du * (2.0 * dx - u_new[k] - u_old[k]) / (a + bb) / (a * bb)
+            b_minus_a = du * (2.0 * dx - u_new[k] - u_old[k]) / (a + bb)
+            acc += b_minus_a / (a * bb)
+            if with_gravity:
+                ab = a * bb
+                acc_g += dz * b_minus_a * (a * a + ab + bb * bb) / (ab * ab * ab)
         delta[s] -= gm * acc
+        if with_gravity:
+            delta_g[s] += gm * acc_g
 
 
 def potential(block_positions, sensor_positions, block_mass):
@@ -94,8 +110,19 @@ class SensorArray:
         return self.update_blocks(delta, indices, np.asarray(u_old, dtype=float)[indices],
                                   np.asarray(u_new, dtype=float)[indices])
 
-    def update_blocks(self, delta, indices, u_before, u_after):
-        """Like update, with u_before/u_after given only for the blocks `indices`."""
-        _change_kernel(delta, self.positions, self.block_positions, np.asarray(indices, dtype=np.int64),
-                       np.asarray(u_before, dtype=float), np.asarray(u_after, dtype=float), G * self.block_mass)
+    def update_blocks(self, delta, indices, u_before, u_after, delta_g=None):
+        """Like update, with u_before/u_after given only for the blocks `indices`. If delta_g
+        is given, the change of the downward gravity (m/s^2) is added to it as well."""
+        with_gravity = delta_g is not None
+        _change_kernel(delta, delta_g if with_gravity else delta, self.positions, self.block_positions,
+                       np.asarray(indices, dtype=np.int64), np.asarray(u_before, dtype=float),
+                       np.asarray(u_after, dtype=float), G * self.block_mass, with_gravity)
         return delta
+
+    def gravity_change(self, u):
+        """Change of the downward gravity (m/s^2) at each sensor for displacements u (m, along x)."""
+        u = np.asarray(u, dtype=float)
+        moved = np.flatnonzero(u)
+        delta_g = np.zeros(len(self.positions))
+        self.update_blocks(np.zeros(len(self.positions)), moved, np.zeros(len(moved)), u[moved], delta_g)
+        return delta_g

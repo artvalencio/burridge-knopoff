@@ -17,7 +17,10 @@ from . import grid
 
 CATALOGUE_COLUMNS = ('start_years', 'duration_s', 'hypocentre', 'hypocentre_row', 'hypocentre_col',
                      'hypocentre_x_m', 'hypocentre_y_m', 'n_slipped', 'total_slip_m', 'max_slip_m',
-                     'peak_velocity_m_s', 'moment_n_m', 'magnitude')
+                     'peak_velocity_m_s', 'moment_n_m', 'magnitude',
+                     'dg_max_abs_ugal', 'dg_rms_ugal', 'dg_max_sensor', 'dphi_max_abs',
+                     'tide_shear_pa', 'tide_normal_pa', 'tide_coulomb_pa', 'tide_coulomb_rate_pa_h', 'tide_phase_rad')
+INTEGER_COLUMNS = ('hypocentre', 'hypocentre_row', 'hypocentre_col', 'n_slipped', 'dg_max_sensor')
 
 
 def seismic_moment(slip, config):
@@ -38,6 +41,17 @@ class Event:
     hypocentre: index of the first failing block; n_slipped: number of blocks that
     slipped; total_slip_m, max_slip_m: sum and maximum of their slips;
     peak_velocity_m_s: fastest block velocity; moment_n_m, magnitude: M0 and Mw.
+
+    Co-seismic gravity (the step the event causes at the sensors): dg_max_abs_ugal,
+    dg_rms_ugal: largest and RMS |change of the downward gravity| over the sensors
+    (microGal); dg_max_sensor: where the largest is; dphi_max_abs: largest |potential
+    change| (J/kg).
+
+    Tides at the hypocentre at the origin time (all 0 without tides): tide_shear_pa: the
+    driving stress (shear on the fault plus the body force per unit area, along the slip);
+    tide_normal_pa: normal stress (tension positive); tide_coulomb_pa: shear + mu_s normal;
+    tide_coulomb_rate_pa_h: its rate; tide_phase_rad: semidiurnal phase of the Coulomb
+    stress at the grid centre (0 at its maxima).
     """
     start_years: float
     duration_s: float
@@ -48,6 +62,15 @@ class Event:
     peak_velocity_m_s: float
     moment_n_m: float
     magnitude: float
+    dg_max_abs_ugal: float = math.nan
+    dg_rms_ugal: float = math.nan
+    dg_max_sensor: int = -1
+    dphi_max_abs: float = math.nan
+    tide_shear_pa: float = 0.0
+    tide_normal_pa: float = 0.0
+    tide_coulomb_pa: float = 0.0
+    tide_coulomb_rate_pa_h: float = 0.0
+    tide_phase_rad: float = 0.0
 
     def hypocentre_row_col(self, config):
         return grid.row_col(self.hypocentre, config)
@@ -60,12 +83,14 @@ class Event:
 
 def catalogue(event_list, config):
     """The events as a numpy structured array with the CATALOGUE_COLUMNS."""
-    dtype = [(name, np.int64 if name in ('hypocentre', 'hypocentre_row', 'hypocentre_col', 'n_slipped')
-              else np.float64) for name in CATALOGUE_COLUMNS]
+    dtype = [(name, np.int64 if name in INTEGER_COLUMNS else np.float64) for name in CATALOGUE_COLUMNS]
     table = np.zeros(len(event_list), dtype=dtype)
     for k, ev in enumerate(event_list):
         row, col = ev.hypocentre_row_col(config)
         x, y = ev.hypocentre_xy(config)
         table[k] = (ev.start_years, ev.duration_s, ev.hypocentre, row, col, x, y, ev.n_slipped,
-                    ev.total_slip_m, ev.max_slip_m, ev.peak_velocity_m_s, ev.moment_n_m, ev.magnitude)
+                    ev.total_slip_m, ev.max_slip_m, ev.peak_velocity_m_s, ev.moment_n_m, ev.magnitude,
+                    ev.dg_max_abs_ugal, ev.dg_rms_ugal, ev.dg_max_sensor, ev.dphi_max_abs,
+                    ev.tide_shear_pa, ev.tide_normal_pa, ev.tide_coulomb_pa, ev.tide_coulomb_rate_pa_h,
+                    ev.tide_phase_rad)
     return table
