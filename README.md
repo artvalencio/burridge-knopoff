@@ -685,7 +685,8 @@ burridge-knopoff/
 
 ## References
 
-Model, seismicity and statistics
+### Model, seismicity and statistics
+
 1. Aki, K. (1965). Maximum likelihood estimate of b in the formula log N = a − bM and its confidence limits. *Bulletin of the Earthquake Research Institute*, 43, 237–239.
 2. Ben-Zion, Y., & Rice, J. R. (1993). Earthquake failure sequences along a cellular fault zone in a three-dimensional elastic solid containing asperity and nonasperity regions. *Journal of Geophysical Research*, 98(B8), 14109–14131.
 3. Burridge, R., & Knopoff, L. (1967). Model and theoretical seismicity. *Bulletin of the Seismological Society of America*, 57(3), 341–371.
@@ -697,7 +698,8 @@ Model, seismicity and statistics
 9. Scholz, C. H. (2002). *The Mechanics of Earthquakes and Faulting* (2nd ed.). Cambridge University Press.
 10. Ward, S. N. (2000). San Francisco Bay Area earthquake simulations: a step toward a standard physical earthquake model. *Bulletin of the Seismological Society of America*, 90(2), 370–386.
 
-Friction, nucleation and earthquake simulators
+### Friction, nucleation and earthquake simulators
+
 11. Dieterich, J. H. (1979). Modeling of rock friction: 1. Experimental results and constitutive equations. *Journal of Geophysical Research*, 84(B5), 2161–2168.
 12. Dieterich, J. H. (1987). Nucleation and triggering of earthquake slip: effect of periodic stresses. *Tectonophysics*, 144, 127–139.
 13. Dieterich, J. H. (1992). Earthquake nucleation on faults with rate- and state-dependent strength. *Tectonophysics*, 211, 115–134.
@@ -706,7 +708,8 @@ Friction, nucleation and earthquake simulators
 16. Rubin, A. M., & Ampuero, J.-P. (2005). Earthquake nucleation on (aging) rate and state faults. *Journal of Geophysical Research*, 110, B11312.
 17. Ruina, A. (1983). Slip instability and state variable friction laws. *Journal of Geophysical Research*, 88(B12), 10359–10370.
 
-Deformation and gravity of fault slip
+### Deformation and gravity of fault slip
+
 18. Farrell, W. E. (1972). Deformation of the Earth by surface loads. *Reviews of Geophysics*, 10(3), 761–797.
 19. Okada, Y. (1985). Surface deformation due to shear and tensile faults in a half-space. *Bulletin of the Seismological Society of America*, 75(4), 1135–1154.
 20. Okada, Y. (1992). Internal deformation due to shear and tensile faults in a half-space. *Bulletin of the Seismological Society of America*, 82(2), 1018–1040.
@@ -714,11 +717,13 @@ Deformation and gravity of fault slip
 22. Okubo, S. (1992). Gravity and potential changes due to shear and tensile faults in a half-space. *Journal of Geophysical Research*, 97(B5), 7137–7144.
 23. Savage, J. C. (1983). A dislocation model of strain accumulation and release at a subduction zone. *Journal of Geophysical Research*, 88(B6), 4984–4996.
 
-Observations of slip and gravity before large earthquakes
+### Observations of slip and gravity before large earthquakes
+
 24. Kato, A., Obara, K., Igarashi, T., Tsuruoka, H., Nakagawa, S., & Hirata, N. (2012). Propagation of slow slip leading up to the 2011 Mw 9.0 Tohoku-Oki earthquake. *Science*, 335, 705–708.
 25. Panet, I., Bonvalot, S., Narteau, C., Remy, D., & Lemoine, J.-M. (2018). Migrating pattern of deformation prior to the Tohoku-Oki earthquake revealed by GRACE data. *Nature Geoscience*, 11, 367–373.
 
-Earth tides and tidal triggering
+### Earth tides and tidal triggering
+
 26. Agnew, D. C. (2007). Earth tides. *Treatise on Geophysics*, vol. 3, 163–195.
 27. Beeler, N. M., & Lockner, D. A. (2003). Why earthquakes correlate weakly with the solid Earth tides: effects of periodic stress on the rate and probability of earthquake occurrence. *Journal of Geophysical Research*, 108(B8), 2391.
 28. Cartwright, D. E., & Edden, A. C. (1973). Corrected tables of tidal harmonics. *Geophysical Journal of the Royal Astronomical Society*, 33, 253–264.
@@ -729,7 +734,8 @@ Earth tides and tidal triggering
 33. Schuster, A. (1897). On lunar and solar periodicities of earthquakes. *Proceedings of the Royal Society of London*, 61, 455–465.
 34. Tanaka, S., Ohtake, M., & Sato, H. (2002). Evidence for tidal triggering of earthquakes as revealed from statistical analysis of global data. *Journal of Geophysical Research*, 107(B10), 2211.
 
-Nonlinear dynamics and time-series analysis
+### Nonlinear dynamics and time-series analysis
+
 35. Arnold, L. (1998). *Random Dynamical Systems*. Springer.
 36. Aurell, E., Boffetta, G., Crisanti, A., Paladin, G., & Vulpiani, A. (1997). Predictability in the large: an extension of the concept of Lyapunov exponent. *Journal of Physics A*, 30, 1–26.
 37. Bandt, C., & Pompe, B. (2002). Permutation entropy: a natural complexity measure for time series. *Physical Review Letters*, 88, 174102.
