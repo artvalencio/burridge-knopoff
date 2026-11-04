@@ -621,9 +621,21 @@ Development-grid results (2-D, 100 km, 100 years after a 20-year spin-up):
 | H6, synchronisation | partly: regional phase locking decays with distance like the coupling; tides lock events to the tide (forced synchronisation) but do not increase regional synchrony |
 | H7, information flow | not supported at weekly resolution: no transfer entropy between regions (the coupling acts within events); tide-to-seismicity transfer entropy with short histories is inconclusive, while the Schuster test is unambiguous |
 
+Full-size results (2-D, 500 km, 250 x 250 blocks, 25 x 25 sensors, 100 years after a
+20-year spin-up; 10 seeds for A, B, C and 5 for the others; unpaired comparisons
+against the controls of section 7; about 3.5 hours on 4 cores):
+
+| Hypothesis | Result |
+|---|---|
+| H1, counts | supported for real tides: C vs B +48 [-669, 801] events out of ~153,000 (+0.03 %, Mann-Whitney p 0.91); b +0.0015 [-0.004, 0.007]; Dm, Ds and W-C vs W-A also not significant. Not true for strong tides, unlike the development grid: x10 is borderline (+948 [27, 1820], p 0.10), x100 gives -1.4 % (p 0.005), and x1000 gives -13 % events, b -0.024 [-0.032, -0.017] and more Mw >= 7 events (306 vs 292 per run). Strong tides hold failures back to the tidal peaks, where they cascade into fewer, larger ruptures |
+| H2, timing | supported: Schuster p ~ 0 in every tidal condition and ~0.5 in the no-tide nulls (A, B, W-A); real tides leave almost no events in the 2-3 lowest tidal-stress deciles and 1.6-1.8x the expected rate in the upper ones. Moon-only locks like Moon + Sun; Sun-only locks more weakly |
+| H3, gravity | supported: the dg-Mw slope (1.18) and the Anderson-Darling tests of the per-event dg are unchanged; the cumulative co-seismic maps (up to +-133 uGal, mostly at the grid edges) differ between C and A by at most 1.8 uGal (0.5 uGal rms), no more than B vs A (1.5 uGal); x1000 changes them by ~10 % |
+| Pre-seismic gravity | the residual maps in the year before the largest events (Mw 7.65 without tides, Mw 7.60 with tides; 8,767 hourly frames) change in steps from earlier events, up to ~8 uGal, with no smooth precursory trend |
+
 Lessons: hourly checks at the step ends missed short tidal excursions (fixed by exact
 crossings inside each step); sparse event series need an explicit "no event" symbol
-for the information measures.
+for the information measures; the amplified-tide effect on counts appears only on the
+full-size fault, so results on the development grid do not carry over without checking.
 
 ## References
 

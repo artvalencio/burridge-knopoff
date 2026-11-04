@@ -341,15 +341,74 @@ cutoff together; the estimators above separate the two.
 
 ```bash
 pip install -e .[test]
-pytest              # 185 fast tests
+pytest              # 188 fast tests
 pytest -m slow      # time/memory budgets and long-run statistics
 ```
 
-## Tides: first results
+## Tides: results
 
 `3d_model/experiments/tides_comparison.py` runs ensembles with and without
-tides. On a 100 km grid (50 × 50 blocks, 100 years after a 20-year spin-up,
-10 seeds; each condition against its control):
+tides (`run --size full`, then `report --size full`). The model is chaotic, so
+runs with the same seed decorrelate and conditions are compared as independent
+samples, each against its control: B (hourly stepping with a zero tide) against
+A, every tidal condition against B, and W-C against W-A.
+
+**Full size** (500 km, 250 × 250 blocks, 25 × 25 sensors, 100 years after a
+20-year spin-up; 10 seeds for A, B, C and 5 for the others; mean and 95 %
+bootstrap CI; about 3.5 hours on 4 cores):
+
+| Condition | Events | Mw ≥ 7 | b | Schuster p | Events vs control | Mann-Whitney p |
+|---|---|---|---|---|---|---|
+| A: no tides | 153,297 | 288 | 0.661 | 0.49 | | |
+| B: hourly stepping, zero tide | 153,055 | 292 | 0.658 | 0.48 | −242 [−809, 339] vs A | 0.79 |
+| C: Moon + Sun | 153,103 | 288 | 0.660 | ≈ 0 | +48 [−669, 801] | 0.91 |
+| Dm: Moon only | 153,242 | 281 | 0.657 | ≈ 0 | +187 [−784, 1216] | 0.86 |
+| Ds: Sun only | 153,807 | 282 | 0.661 | ≈ 0 | +752 [−23, 1544] | 0.13 |
+| E10: tides × 10 | 154,003 | 276 | 0.658 | ≈ 0 | +948 [27, 1820] | 0.10 |
+| E100: tides × 100 | 150,891 | 290 | 0.655 | ≈ 0 | −2,163 [−3403, −1029] | 0.005 |
+| E1000: tides × 1000 | 132,666 | 306 | 0.634 | ≈ 0 | −20,390 (−13 %) | < 0.001 |
+| W-A: velocity weakening, no tides | 110,742 | 35 | 1.37 | 0.57 | | |
+| W-C: velocity weakening, Moon + Sun | 113,377 | 35 | 1.35 | ≈ 0 | +2,635 [−2726, 7278] vs W-A | 0.55 |
+
+- **Number of events and magnitudes.** Real tides (C, Dm, Ds, W-C) change
+  neither the number of events (C: +0.03 %) nor the b-value (+0.0015
+  [−0.004, 0.007]). The Anderson-Darling tests find no difference in the
+  magnitude distribution. Only tides amplified 100 times or more change the
+  catalogue: × 100 gives 1.4 % fewer events, and × 1000 gives 13 % fewer
+  events, a lower b-value (−0.024 [−0.032, −0.017]) and more Mw ≥ 7 events.
+  Strong tides hold failures back until the tidal peaks, where they cascade
+  into fewer, larger ruptures. On the 100 km development grid even × 1000 had
+  no detectable effect, so the size of the fault matters.
+- **Timing.** Every tidal condition is strongly phase-locked (Schuster p ≈ 0).
+  With real tides there are almost no events in the 2–3 lowest deciles of
+  tidal Coulomb stress, and 1.6–1.8 times the expected rate in the upper
+  deciles. Moon-only modulation is close to Moon + Sun; Sun-only modulation is
+  weaker. With amplified tides all events fall in the highest deciles. The
+  no-tide runs (A, B, W-A), scored against the same tidal series, show no
+  locking (p ≈ 0.5 and a flat rate). This is the null control.
+- **Co-seismic gravity.** The co-seismic gravity change per event follows the
+  same scaling with magnitude (slope 1.18 per unit Mw) with and without tides.
+  The Anderson-Darling tests find no difference in the distribution. The
+  cumulative change over 100 years reaches ±133 µGal, mostly at the grid edges.
+  The mean maps of C and A differ by at most 1.8 µGal (0.5 µGal rms, 1.4 %),
+  which is no more than the difference between B and A (1.5 µGal), where no
+  tide is applied. Even × 1000 changes the maps by only 10 %.
+
+![Event counts per condition, full size](docs/tides_event_counts_500km.png)
+
+![Observed / expected events per decile of tidal Coulomb stress, full size](docs/tides_rate_vs_stress_500km.png)
+
+The pre-seismic animations (`python main.py --preseismic`, with and without
+`--tides`) cover the year before the largest event after the spin-up in 8,767
+hourly frames. In the year before the Mw 7.65 (no tides) and Mw 7.60 (tides)
+events, the changes of up to about 8 µGal come in steps from earlier events.
+There is no smooth precursory trend. With tides, the map shows the residual
+after the applied tide is removed:
+
+![Last frames of the pre-seismic residual animation of the Mw 7.60 event, with tides](docs/preseismic_tides_500km.png)
+
+**Development grid** (100 km, 50 × 50 blocks, 100 years after a 20-year
+spin-up, 10 seeds):
 
 | Condition | Events | b | Schuster p | vs control |
 |---|---|---|---|---|
@@ -358,13 +417,10 @@ tides. On a 100 km grid (50 × 50 blocks, 100 years after a 20-year spin-up,
 | C: Moon + Sun | 6054 | 0.686 | ≈ 0 | +20 [−88, 122] vs B |
 | tides × 1000 (5 seeds) | 6007 | 0.690 | ≈ 0 | −26 [−141, 89] vs B |
 
-Tides do not change the number of events or the b-value detectably, even
-amplified a thousand times, but they lock the timing of the events: none
-occur in the lowest tidal-stress deciles. A threshold (Coulomb) model has no
-nucleation delay, so it overstates this locking compared with real faults.
-The cumulative co-seismic gravity change (±250 µGal over 100 years) differs
-by less than 1 % with tides. The model is chaotic, so runs with the same seed
-decorrelate and conditions are compared as independent samples.
+On this grid, tides change neither the number of events nor the b-value
+detectably, even amplified a thousand times, but they lock the timing of the
+events in the same way. A threshold (Coulomb) model has no nucleation delay,
+so it overstates this locking compared with real faults.
 
 ## Nonlinear dynamics: first results
 

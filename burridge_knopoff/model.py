@@ -159,15 +159,29 @@ def _activate(i, u, active, slipped, order, u_start, n_order, act, n_act):
     return n_order, n_act + 1
 
 
+@njit(cache=True, inline='always')
+def _threshold(static, normal, i, mus, tidal):
+    # strength of block i, lowered by the tidal unclamping when tides are on
+    return static[i] - mus * normal[i] if tidal else static[i]
+
+
+@njit(cache=True, inline='always')
+def _sliding(v, static, normal, i, fd, vw, keep, mus, mud, tidal):
+    if tidal:
+        return _friction_tidal(v, static[i], fd, vw, keep, normal[i], mus, mud)
+    return _friction(v, static[i], fd, vw, keep)
+
+
 @njit(cache=True)
 def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol, kw, ksum, plate, vp, dt,
                  hypocentre, max_steps, active, slipped, act, moved, acc, disp, order, u_start,
-                 drive, normal, mus, mud):
+                 drive, normal, mus, mud, tidal):
     """Integrates one event in place (u, v, force).
 
     Tides (frozen during the event): drive[i] is added to the force on block i, and the
     normal force normal[i] (tension positive) lowers its strength by mus normal[i] and its
-    sliding friction by mud normal[i]. Zero arrays give the tide-free model exactly.
+    sliding friction by mud normal[i]. With tidal False these arrays are not read (the
+    tide-free model, unchanged and as fast as before).
 
     Forces: with the nearest-neighbour stencil each force is recomputed from the
     displacements when needed (4 terms). With longer ranges (incremental mode),
@@ -199,7 +213,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
             # quiet: did the (tiny) plate motion during the event push any other block over?
             for i in range(n):
                 f_i = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
-                if f_i + drive[i] > static[i] - mus * normal[i]:
+                if (f_i + drive[i] if tidal else f_i) > _threshold(static, normal, i, mus, tidal):
                     n_order, n_act = _activate(i, u, active, slipped, order, u_start, n_order, act, n_act)
             if n_act == 0:
                 completed = True
@@ -208,7 +222,9 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
         for k in range(n_act):
             i = act[k]
             f_i = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
-            acc[i] = (f_i + drive[i] - _friction_tidal(v[i], static[i], fd, vw, keep, normal[i], mus, mud)) / mass
+            if tidal:
+                f_i += drive[i]
+            acc[i] = (f_i - _sliding(v[i], static, normal, i, fd, vw, keep, mus, mud, tidal)) / mass
         sum_before = sum_u
         for k in range(n_act):
             i = act[k]
@@ -217,7 +233,8 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
                 du = 0.0  # no backward slip
             u[i] += du
             sum_u += du
-            tide_work += drive[i] * du
+            if tidal:
+                tide_work += drive[i] * du
             disp[i] = du
             moved[k] = i
         if incremental:
@@ -242,17 +259,18 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
         n_keep = 0
         for k in range(n_act):
             i = act[k]
-            f_old = _friction_tidal(v[i], static[i], fd, vw, keep, normal[i], mus, mud)
+            f_old = _sliding(v[i], static, normal, i, fd, vw, keep, mus, mud, tidal)
             v_pred = v[i] + acc[i] * dt  # velocity-dependent friction at the end of the step
             f_new = force[i] + kp * (plate - plate_start) if incremental else _force(i, u, plate, nx, ny, kp, drow, dcol, kw)
-            f_new += drive[i]
-            fric_new = _friction_tidal(v_pred, static[i], fd, vw, keep, normal[i], mus, mud)
+            if tidal:
+                f_new += drive[i]
+            fric_new = _sliding(v_pred, static, normal, i, fd, vw, keep, mus, mud, tidal)
             v_new = v[i] + 0.5 * (acc[i] + (f_new - fric_new) / mass) * dt
             # friction work: mean friction over the step times the distance slid
             dissipated += 0.5 * (f_old + fric_new) * disp[i]
             if v_new <= 0.0:
                 v[i] = 0.0
-                if f_new <= static[i] - mus * normal[i]:
+                if f_new <= _threshold(static, normal, i, mus, tidal):
                     active[i] = False  # stops: friction can hold it again
                     continue
             else:
@@ -275,7 +293,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
                     if active[j]:
                         continue
                     f_j = force[j] + kp * (plate - plate_start) if incremental else _force(j, u, plate, nx, ny, kp, drow, dcol, kw)
-                    if f_j + drive[j] > static[j] - mus * normal[j]:
+                    if (f_j + drive[j] if tidal else f_j) > _threshold(static, normal, j, mus, tidal):
                         n_order, n_act = _activate(j, u, active, slipped, order, u_start, n_order, act, n_act)
         steps += 1
     # update the maintained forces: the plate moved for everyone, and the slipped
@@ -542,6 +560,11 @@ class Model:
             return np.inf, -1
         return t_fail - t0, int(cand[c])
 
+    @property
+    def tidal_event(self):
+        """Whether the next event feels a tide (any non-zero tidal force)."""
+        return bool(self.tide_drive.any() or self.tide_normal.any())
+
     def set_tide(self, coefficients_drive, coefficients_normal):
         """Freezes the tidal forcing for the next event, from fitted coefficients (c0, cx, cy)."""
         cd, cn = coefficients_drive, coefficients_normal
@@ -567,7 +590,7 @@ class Model:
             self.mass, self.config.n_blocks_x, self.config.n_blocks_y, self.drow, self.dcol, self.kw, self.ksum,
             self.plate_m, self.vp, self.dt, hypocentre, self.max_event_steps, w['active'], w['slipped'],
             w['act'], w['moved'], w['acc'], w['disp'], w['order'], w['u_start'],
-            self.tide_drive, self.tide_normal, self.mus, self.mud)
+            self.tide_drive, self.tide_normal, self.mus, self.mud, self.tidal_event)
         if not completed:
             raise RuntimeError('event did not stop within %d steps' % self.max_event_steps)
         self.time_s += steps * self.dt
