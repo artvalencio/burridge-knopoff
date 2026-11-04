@@ -175,8 +175,11 @@ def _sliding(v, static, normal, i, fd, vw, keep, mus, mud, tidal):
 @njit(cache=True)
 def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol, kw, ksum, plate, vp, dt,
                  hypocentre, max_steps, active, slipped, act, moved, acc, disp, order, u_start,
-                 drive, normal, mus, mud, tidal):
+                 drive, normal, mus, mud, tidal, rec_every, rec_u):
     """Integrates one event in place (u, v, force).
+
+    Recording (rec_every > 0): rec_u[0] receives the displacements at the start and
+    rec_u[k] those after k rec_every steps, while rows remain.
 
     Tides (frozen during the event): drive[i] is added to the force on block i, and the
     normal force normal[i] (tension positive) lowers its strength by mus normal[i] and its
@@ -194,7 +197,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
     acc, disp, u_start (size n). On return order[:n_slipped] lists the slipped
     blocks in order of first failure and u_start[order[k]] their displacements
     before. Returns (plate, steps, n_slipped, peak velocity, dissipated energy,
-    plate work, completed, tidal work).
+    plate work, completed, tidal work, rows of rec_u filled).
     """
     n = u.shape[0]
     n_stencil = drow.shape[0]
@@ -208,6 +211,11 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
     tide_work = 0.0
     steps = 0
     completed = False
+    n_rec = 0
+    if rec_every > 0:
+        for i in range(n):
+            rec_u[0, i] = u[i]
+        n_rec = 1
     while steps < max_steps:
         if n_act == 0:
             # quiet: did the (tiny) plate motion during the event push any other block over?
@@ -296,6 +304,10 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
                     if (f_j + drive[j] if tidal else f_j) > _threshold(static, normal, j, mus, tidal):
                         n_order, n_act = _activate(j, u, active, slipped, order, u_start, n_order, act, n_act)
         steps += 1
+        if rec_every > 0 and steps % rec_every == 0 and n_rec < rec_u.shape[0]:
+            for i in range(n):
+                rec_u[n_rec, i] = u[i]
+            n_rec += 1
     # update the maintained forces: the plate moved for everyone, and the slipped
     # blocks and the blocks coupled to them are recomputed exactly (this also
     # removes any rounding accumulated by the incremental updates)
@@ -315,7 +327,7 @@ def _slip_kernel(u, v, force, static, fd, vw, keep, kp, mass, nx, ny, drow, dcol
     for k in range(n_order):  # restore the work-array invariant
         slipped[order[k]] = False
         active[order[k]] = False
-    return plate, steps, n_order, peak, dissipated, work, completed, tide_work
+    return plate, steps, n_order, peak, dissipated, work, completed, tide_work, n_rec
 
 
 @njit(cache=True)
@@ -413,6 +425,9 @@ def _first_failure(gap, x, y, coulomb, step_s, rate, t0, t_end):
     return -1.0, -1
 
 
+_NO_FRAMES = np.zeros((1, 1), dtype=np.float32)
+
+
 class Model:
     """State and dynamics of the spring-block system for a SimulationConfig.
 
@@ -476,6 +491,17 @@ class Model:
                           act=np.empty(n, dtype=np.int64), moved=np.empty(n, dtype=np.int64),
                           acc=np.zeros(n), disp=np.zeros(n), order=np.empty(n, dtype=np.int64),
                           u_start=np.zeros(n))
+        # precursory creep (see nucleation): creep of each block since its last seismic slip
+        self.preslip_m = np.zeros(n)
+        if config.preslip:
+            area = config.block_area_m2
+            self.a_sigma = config.rs_a_sigma_pa
+            self.h_sigma = config.rs_b_sigma_pa / config.rs_dc_m - self.ksum / area
+            self.weaken = config.rs_b_sigma_pa * area / config.rs_dc_m
+            self.gamma_cut = self.a_sigma * np.log(config.rs_min_velocity_m_s / config.rs_seismic_velocity_m_s)
+            self._creep_work = dict(state=np.zeros(n, dtype=np.int8), cand=np.empty(n, dtype=np.int64),
+                                    fast=np.empty(n, dtype=np.int64), vel=np.zeros(n), t_join=np.zeros(n),
+                                    dstep=np.zeros(n), dcorr=np.zeros(n))
 
     def _draw_strengths(self, size, blocks=None):
         # F_s,i = F_d + (F_s - F_d) x uniform[1 - h, 1 + h]
@@ -575,6 +601,32 @@ class Model:
         self.tide_drive = np.zeros(self.config.n_blocks)
         self.tide_normal = np.zeros(self.config.n_blocks)
 
+    def creep(self, t_stop, hourly=None):
+        """Precursory creep (config.preslip) from now until the first block becomes unstable or
+        t_stop; advances the plate and the time to that moment. Returns the failing block, or
+        -1 at t_stop. hourly: the tide table (HourlyTide) with tides."""
+        from . import nucleation
+        cfg = self.config
+        t0 = self.time_s
+        if hourly is not None:
+            if getattr(self, '_tide_margin_source', None) is not hourly:
+                spread = hourly.max_spatial_variation(np.abs(self.x_centre).max(), np.abs(self.y_centre).max())
+                peak = np.abs(hourly.coulomb[:, 0]).max() + spread
+                self._tide_margin = 2.0 * peak / cfg.block_area_m2
+                self._tide_margin_source = hourly
+            coulomb, step_s, margin, cap = hourly.coulomb, hourly.step_s, self._tide_margin, hourly.step_s / 4
+        else:
+            coulomb, step_s, margin, cap = np.zeros((2, 3)), 1.0, 0.0, np.inf
+        w = self._creep_work
+        t_end, failed = nucleation.advance(
+            self.u, self.current_force, self.static_force, self.preslip_m, self.ksum, self.kw, self.drow, self.dcol,
+            cfg.n_blocks_x, cfg.n_blocks_y, self.kp * self.vp, cfg.block_area_m2, self.a_sigma, self.h_sigma,
+            self.weaken, cfg.rs_seismic_velocity_m_s, self.gamma_cut, t0, max(t_stop, t0), hourly is not None,
+            coulomb, step_s, self.x_centre, self.y_centre, margin, cap, w['state'], w['cand'], w['fast'], w['vel'],
+            w['t_join'], w['dstep'], w['dcorr'], 10_000_000)
+        self.load(t_end - t0)
+        return int(failed)
+
     def load(self, seconds):
         """Advance the plate while every block stays stuck."""
         self.plate_m += self.vp * seconds
@@ -582,15 +634,24 @@ class Model:
         self.current_force += self.kp * self.vp * seconds
 
     # ---- slip -------------------------------------------------------------------
+    record = None  # (every, float32 array (frames, n_blocks)): record the next event (see slip)
+
     def slip(self, hypocentre):
-        """Integrate one event starting with the failure of block `hypocentre`."""
+        """Integrate one event starting with the failure of block `hypocentre`.
+
+        If self.record = (every, frames) is set, the displacements are copied into frames[0] at
+        the start and every `every` steps after (the number of rows filled is left in
+        self.recorded_frames), and record is cleared."""
         w = self._work
-        plate, steps, n_slipped, peak, dissipated, work, completed, tide_work = _slip_kernel(
+        rec_every, rec_u = (0, _NO_FRAMES) if self.record is None else self.record
+        self.record = None
+        plate, steps, n_slipped, peak, dissipated, work, completed, tide_work, n_rec = _slip_kernel(
             self.u, self.v, self.current_force, self.static_force, self.fd, self.vw, self.keep, self.kp,
             self.mass, self.config.n_blocks_x, self.config.n_blocks_y, self.drow, self.dcol, self.kw, self.ksum,
             self.plate_m, self.vp, self.dt, hypocentre, self.max_event_steps, w['active'], w['slipped'],
             w['act'], w['moved'], w['acc'], w['disp'], w['order'], w['u_start'],
-            self.tide_drive, self.tide_normal, self.mus, self.mud, self.tidal_event)
+            self.tide_drive, self.tide_normal, self.mus, self.mud, self.tidal_event, rec_every, rec_u)
+        self.recorded_frames = n_rec
         if not completed:
             raise RuntimeError('event did not stop within %d steps' % self.max_event_steps)
         self.time_s += steps * self.dt
@@ -604,6 +665,10 @@ class Model:
             # force including the tidal drive and unclamping it feels when it stops)
             held = self.current_force[slipped] + self.tide_drive[slipped] + self.mus * self.tide_normal[slipped]
             self.static_force[slipped] = np.maximum(self._draw_strengths(n_slipped, slipped), held)
+        elif self.config.preslip:
+            # quenched strengths heal: the weakening of the precursory creep is undone
+            self.static_force[slipped] += self.weaken * self.preslip_m[slipped]
+        self.preslip_m[slipped] = 0.0
         return SlipResult(slipped=slipped, u_before=u_before, slip=self.u[slipped] - u_before,
                           duration_s=steps * self.dt, peak_velocity_m_s=peak, dissipated_j=dissipated,
                           plate_work_j=work, steps=steps, tide_work_j=tide_work)

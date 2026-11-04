@@ -632,9 +632,36 @@ against the controls of section 7; about 3.5 hours on 4 cores):
 | H3, gravity | supported: the dg-Mw slope (1.18) and the Anderson-Darling tests of the per-event dg are unchanged; the cumulative co-seismic maps (up to +-133 uGal, mostly at the grid edges) differ between C and A by at most 1.8 uGal (0.5 uGal rms), no more than B vs A (1.5 uGal); x1000 changes them by ~10 % |
 | Pre-seismic gravity | the residual maps in the year before the largest events (Mw 7.65 without tides, Mw 7.60 with tides; 8,767 hourly frames) change in steps from earlier events, up to ~8 uGal, with no smooth precursory trend |
 
+Added after the full-size runs, in 2-D (README: "Strain build-up and precursory slip",
+"Displacement during events"):
+
+- Dislocation gravity (`gravity_model='dislocation'`). The blocks are patches of a
+  10-degree thrust in a half-space. Gravity at the surface follows Okubo (1992), and
+  the displacements Okada (1985). The interseismic slip deficit is included through
+  back slip (Savage, 1983), about 3 uGal/yr. This is the 2-D precursor of the
+  section 3 gravity model, and the 3-D model reuses `dislocation.py`.
+- Precursory creep (`preslip=True`). Rate-and-state nucleation before failure, after
+  Dieterich (1992), with exact steps under constant stressing rates.
+  - It produces Omori-type aftershocks: 3.7x the events on the development grid.
+  - The hypocentre creeps ~0.3 mm before failure, ~1e-4 uGal of gravity: not
+    detectable.
+  - The tidal triggering becomes realistic. Real tides give no significant locking
+    (declustered Schuster p 0.1-0.9); x10 gives weak locking and x100 strong
+    locking, since t_a = a sigma / stressing rate (~27 days) is much longer than
+    the tide.
+- Rupture replays and displacement maps (`--rupture`): slip on the fault, surface
+  displacement vectors and gravity, frame by frame.
+
+Next: the 3-D model (phases 3-5) is the next step. It needs Okada (1992) internal
+stresses (DC3D port, cutde or pyrocko). After it, the full-size experiments with creep
+(tide amplification, declustered statistics, precursor test on the slip-deficit
+gravity).
+
 Lessons: hourly checks at the step ends missed short tidal excursions (fixed by exact
 crossings inside each step); sparse event series need an explicit "no event" symbol
-for the information measures; the amplified-tide effect on counts appears only on the
+for the information measures; catalogues with aftershock sequences must be declustered
+before a Schuster test; replays need integration steps that do not depend on what is
+recorded; the amplified-tide effect on counts appears only on the
 full-size fault, so results on the development grid do not carry over without checking.
 
 ## References

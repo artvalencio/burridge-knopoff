@@ -13,7 +13,7 @@ import os
 import sys
 import time
 
-from . import analysis, output, preseismic, visualization
+from . import analysis, output, preseismic, rupture, visualization
 from .config import SimulationConfig
 from .simulation import run
 
@@ -49,6 +49,20 @@ def _parser(defaults):
     p.add_argument('--frame-hours', type=float, default=1.0, help='time between pre-seismic frames')
     p.add_argument('--tide-removal', choices=('model', 'fit'), default='model',
                    help='how tides are removed from the pre-seismic gravity (runs with tides)')
+    p.add_argument('--gravity-model', choices=('point-mass', 'dislocation'), default=defaults.gravity_model,
+                   help="gravity of the blocks as point masses, or of fault slip in a half-space (Okubo 1992, "
+                        "with the interseismic back-slip trend)")
+    p.add_argument('--fault-depth', type=float, default=defaults.fault_top_depth_m, metavar='METRES',
+                   help='depth of the top edge of the fault (dislocation model)')
+    p.add_argument('--preslip', action='store_true', default=defaults.preslip,
+                   help='precursory creep of the blocks before they fail (rate-and-state nucleation)')
+    p.add_argument('--rs-a-sigma', type=float, default=defaults.rs_a_sigma_pa, metavar='PA',
+                   help='a sigma of the creep law (Pa)')
+    p.add_argument('--rs-dc', type=float, default=defaults.rs_dc_m, metavar='METRES',
+                   help='characteristic slip distance D_c of the creep law')
+    p.add_argument('--rupture', nargs='?', const='largest', default=None, metavar='EVENT',
+                   help='displacement maps and animation of an event (default: the largest after the spin-up)')
+    p.add_argument('--rupture-frames', type=int, default=60, help='frames of the rupture animation')
     p.add_argument('--output', default='output', help='output directory (data/ and plots/ inside)')
     p.add_argument('--stream', action='store_true', help='write series to disk while simulating (low memory)')
     p.add_argument('--block-csv', action='store_true', help='also write the block displacements as CSV')
@@ -102,6 +116,26 @@ def _preseismic(result, args, data_dir):
         return 1
 
 
+def _rupture(result, args, data_dir):
+    try:
+        k = preseismic.largest_event(result) if args.rupture == 'largest' else int(args.rupture)
+        event = result.events[k]
+        print('[+]   Rupture of event %d (Mw %.2f at %.2f years): replaying...'
+              % (k, event.magnitude, event.start_years), flush=True)
+        rup = rupture.replay(result, k, n_frames=args.rupture_frames)
+        os.makedirs(data_dir, exist_ok=True)
+        rup.save(os.path.join(data_dir, 'rupture_event_%d.npz' % k))
+        plot_dir = os.path.join(args.output, 'plots')
+        os.makedirs(plot_dir, exist_ok=True)
+        still = visualization.displacement_map(rup, os.path.join(plot_dir, 'rupture_event_%d.png' % k))
+        movie = visualization.rupture_animation(rup, os.path.join(plot_dir, 'rupture_event_%d.mp4' % k))
+        print('      %s and %s (%d frames)' % (still, movie, len(rup.frame_times_s)))
+        return 0
+    except Exception as error:
+        print('      ERROR in the rupture maps: %s' % error, file=sys.stderr)
+        return 1
+
+
 def main(argv=None, config=None):
     defaults = config if config is not None else SimulationConfig()
     args = _parser(defaults).parse_args(argv)
@@ -113,6 +147,8 @@ def main(argv=None, config=None):
                                   spinup_years=args.spinup, interaction_range_blocks=args.interaction_range,
                                   tides=args.tides, tide_scale=args.tide_scale,
                                   tide_bodies=','.join(args.tide_bodies), tide_step_hours=args.tide_step,
+                                  gravity_model=args.gravity_model, fault_top_depth_m=args.fault_depth,
+                                  preslip=args.preslip, rs_a_sigma_pa=args.rs_a_sigma, rs_dc_m=args.rs_dc,
                                   **({} if args.weakening is None else
                                      dict(weakening_velocity_m_s=args.weakening[0], onset_drop=args.weakening[1])))
         cfg.validate()
@@ -129,6 +165,12 @@ def main(argv=None, config=None):
     if cfg.tides:
         print('      tides: %s, scale %g, steps of at most %g h' % (cfg.tide_bodies.replace(',', ' + '),
                                                                  cfg.tide_scale, cfg.tide_step_hours))
+    if cfg.gravity_model == 'dislocation':
+        print('      gravity: fault slip in a half-space (dip %g, rake %g, top at %g km)'
+              % (cfg.fault_dip_deg, cfg.fault_rake_deg, cfg.fault_top_depth_m / 1e3))
+    if cfg.preslip:
+        print('      precursory creep: a sigma %g kPa, b/a %g, D_c %g um'
+              % (cfg.rs_a_sigma_pa / 1e3, cfg.rs_b_over_a, cfg.rs_dc_m * 1e6))
     for warning in cfg.check_parameters():
         print('      warning: ' + warning)
     print('[2/4] Simulating...', flush=True)
@@ -153,6 +195,8 @@ def main(argv=None, config=None):
             status = 1
     if args.preseismic is not None:
         status = max(status, _preseismic(result, args, data_dir))
+    if args.rupture is not None:
+        status = max(status, _rupture(result, args, data_dir))
     print(_summary(result))
     print('Finished successfully.' if status == 0 else 'Finished with errors (see above).')
     return status

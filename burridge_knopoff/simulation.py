@@ -21,6 +21,17 @@ advances every tide_step_hours and locates the failure inside the step
 (Model.time_to_failure_tidal), and the tide at the start of each event is
 frozen for its duration (Model.set_tide).
 
+With precursory creep (config.preslip) the blocks are no longer still between events:
+step 1 integrates the creep (Model.creep) up to the next instability in calls that end
+on a fixed grid of CREEP_SYNC_S (1 hour), whatever is being recorded, so that a replay
+with other recorders follows the same trajectory. After each call the sensors are
+brought up to date with the creep (flush_creep) and the recorders are filled, so a
+sample sees the creep up to the end of the hour it falls in (never past an event); the
+co-seismic step still holds the event alone.
+
+With the dislocation gravity model the sensors also see the slip deficit grow between
+events (back slip): gravity_at adds -total x (plate displacement) to the state.
+
 Runner holds the state of a simulation and advances it (advance, step);
 run() is the usual one-shot use. Recorders fill arrays at given times with
 the current state, so replays can record extra series (e.g. hourly frames)
@@ -92,6 +103,9 @@ class SimulationResult:
         return grid.sensor_positions(self.config)
 
 
+CREEP_SYNC_S = 3600.0  # creep calls end on this grid (see the module docstring)
+
+
 def _schedule(total_years, interval_years):
     # 0, dt, 2 dt, ... up to and including the end (tolerant to rounding)
     return np.arange(int(np.floor(total_years / interval_years + 1e-9)) + 1) * interval_years
@@ -137,6 +151,8 @@ class Runner:
         n_s = config.n_sensors
         self.delta = np.zeros(n_s)
         self.delta_g = np.zeros(n_s)
+        self.plate0 = self.model.plate_m
+        self.u_grav = self.model.u.copy() if config.preslip else None  # displacements the sensors reflect
         self._step_phi = np.zeros(n_s)
         self._step_g = np.zeros(n_s)
         self.events = []
@@ -162,7 +178,7 @@ class Runner:
 
             def fill_samples(start, stop):
                 self.potentials[start:stop] = self.delta
-                self.gravity[start:stop] = self.delta_g
+                self.gravity[start:stop] = self.gravity_at(self.times[start:stop] * SECONDS_PER_YEAR)
 
             def fill_snapshots(start, stop):
                 self.displacements[start:stop] = self.model.u.astype(np.float32)
@@ -198,6 +214,38 @@ class Runner:
         for recorder in self.recorders:
             recorder.record_until(t_s)
 
+    def next_record_time(self):
+        """Earliest time at which a recorder still has an entry to fill (inf if none)."""
+        due = [r.times_s[r.next] for r in self.recorders if r.next < len(r.times_s)]
+        return min(due) if due else np.inf
+
+    def gravity_at(self, times_s=None):
+        """Gravity change at the sensors (m/s^2) at the given times (default: now), which must
+        lie between the last event or creep update and the next. With the dislocation model it
+        includes the back-slip trend -total x (x_p(t) - x_p(0)); shape (len(times), n_sensors),
+        or (n_sensors,) for the present."""
+        total = self.sensors.green_total
+        if times_s is None:
+            if total is None:
+                return self.delta_g.copy()
+            return self.delta_g - total * (self.model.plate_m - self.plate0)
+        times_s = np.atleast_1d(np.asarray(times_s, dtype=float))
+        out = np.broadcast_to(self.delta_g, (len(times_s), len(self.delta_g))).copy()
+        if total is not None:
+            m = self.model
+            plate = m.plate_m - m.vp * (m.time_s - times_s)
+            out -= np.outer(plate - self.plate0, total)
+        return out
+
+    def flush_creep(self, tolerance_m=1e-7):
+        """Adds to the sensor state the effect of the creep since the last update, for the blocks
+        that crept by more than tolerance_m (the rest stays pending, so nothing is lost)."""
+        u = self.model.u
+        moved = np.flatnonzero(np.abs(u - self.u_grav) > tolerance_m)
+        if len(moved):
+            self.sensors.update_blocks(self.delta, moved, self.u_grav[moved], u[moved], self.delta_g)
+            self.u_grav[moved] = u[moved]
+
     # ---- dynamics ------------------------------------------------------------------
     def next_failure(self, limit_s):
         """(wait, hypocentre) of the next failure, or a wait beyond limit_s."""
@@ -224,13 +272,18 @@ class Runner:
         """Runs the next event if it starts by limit_s and returns it; otherwise loads the
         plate to limit_s and returns None."""
         model, config = self.model, self.config
-        wait, hypocentre = self.next_failure(limit_s)
-        if model.time_s + wait > limit_s:
-            model.load(limit_s - model.time_s)
-            self.record_until(limit_s)
-            return None
-        model.load(wait)
-        self.record_until(model.time_s)
+        if config.preslip:
+            hypocentre = self._creep_to_failure(limit_s)
+            if hypocentre < 0:
+                return None
+        else:
+            wait, hypocentre = self.next_failure(limit_s)
+            if model.time_s + wait > limit_s:
+                model.load(limit_s - model.time_s)
+                self.record_until(limit_s)
+                return None
+            model.load(wait)
+            self.record_until(model.time_s)
         start_s = model.time_s
         tide = {}
         if self.hourly is not None:
@@ -246,6 +299,12 @@ class Runner:
         step_phi[:] = 0.0
         step_g[:] = 0.0
         self.sensors.update_blocks(step_phi, result.slipped, result.u_before, model.u[result.slipped], step_g)
+        if self.u_grav is not None:
+            # the creep of the slipped blocks up to the event (still pending below the flush
+            # tolerance) goes to the state, not to the co-seismic step
+            self.sensors.update_blocks(self.delta, result.slipped, self.u_grav[result.slipped], result.u_before,
+                                       self.delta_g)
+            self.u_grav[result.slipped] = model.u[result.slipped]
         self.delta += step_phi
         self.delta_g += step_g
         self.dissipated_j += result.dissipated_j
@@ -269,6 +328,19 @@ class Runner:
         self.last_slip = result
         return event
 
+    def _creep_to_failure(self, limit_s):
+        # creep in calls that end on the CREEP_SYNC_S grid; the failing block, or -1 at limit_s
+        model = self.model
+        while True:
+            t_stop = min(limit_s, (math.floor(model.time_s / CREEP_SYNC_S + 1e-9) + 1) * CREEP_SYNC_S)
+            failed = model.creep(t_stop, self.hourly)
+            self.flush_creep()
+            self.record_until(model.time_s)
+            if failed >= 0:
+                return failed
+            if model.time_s >= limit_s:
+                return -1
+
     def advance(self, until_s, progress=None):
         """Runs every event that starts by until_s, then loads the plate to until_s.
         progress: callable receiving the fraction of [0, end] done (about 1000 calls)."""
@@ -286,7 +358,8 @@ class Runner:
         return dict(u=m.u.copy(), v=m.v.copy(), plate_m=m.plate_m, time_s=m.time_s,
                     static_force=m.static_force.copy(), current_force=m.current_force.copy(),
                     rng=copy.deepcopy(m.rng.bit_generator.state), delta=self.delta.copy(),
-                    delta_g=self.delta_g.copy(),
+                    delta_g=self.delta_g.copy(), preslip_m=m.preslip_m.copy(),
+                    u_grav=None if self.u_grav is None else self.u_grav.copy(),
                     rng_counts=None if getattr(m, 'redraw_counts', None) is None else m.redraw_counts.copy())
 
     def restore(self, state):
@@ -301,6 +374,10 @@ class Runner:
             m.redraw_counts[:] = state['rng_counts']
         self.delta[:] = state['delta']
         self.delta_g[:] = state['delta_g']
+        if state.get('preslip_m') is not None:
+            m.preslip_m[:] = state['preslip_m']
+        if state.get('u_grav') is not None:
+            self.u_grav[:] = state['u_grav']
 
     def result(self):
         if not hasattr(self, 'times'):

@@ -11,6 +11,7 @@ import os
 
 import matplotlib
 import matplotlib.animation as animation
+import matplotlib.quiver
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
@@ -247,3 +248,121 @@ def create_all(result, directory, max_frames=300, writer=None, n_event_plots=3):
         paths.append(event_comparison(result, int(k), os.path.join(directory, 'event_%d_comparison.png' % rank)))
     paths.append(magnitude_frequency(result, os.path.join(directory, 'magnitude_frequency.png')))
     return paths
+
+
+# ---- displacement during an event ------------------------------------------------------------
+def _rupture_panels(rupture, n_points):
+    from . import rupture as rp
+    cfg = rupture.config
+    points, xs, ys = rp.map_points(cfg, n=n_points)
+    field = rp.surface_frames(rupture, points)
+    L = cfg.block_spacing_m
+    cd = np.cos(np.radians(cfg.fault_dip_deg))
+    h = rupture.event.hypocentre
+    row, col = divmod(h, cfg.n_blocks_x)
+    hypo_fault = (col * L / 1e3, row * L / 1e3)
+    epicentre = ((-0.5 * L + (col + 0.5) * L * cd) / 1e3, row * L / 1e3)
+    outline_x = np.array([-0.5, -0.5 + cfg.n_blocks_x * cd, -0.5 + cfg.n_blocks_x * cd, -0.5, -0.5]) * L / 1e3
+    outline_y = np.array([-0.5, -0.5, cfg.n_blocks_y - 0.5, cfg.n_blocks_y - 0.5, -0.5]) * L / 1e3
+    return field, xs / 1e3, ys / 1e3, hypo_fault, epicentre, (outline_x, outline_y)
+
+
+def _slip_arrows(cfg, slip_grid, n_arrows=14):
+    # hanging-wall motion on the fault at a sparse sample of blocks: up dip (-x) by sin(rake),
+    # along strike (+y) by cos(rake)
+    ny, nx = slip_grid.shape
+    step = max(1, int(np.ceil(max(nx, ny) / n_arrows)))
+    rr, cc = np.mgrid[step // 2:ny:step, step // 2:nx:step]
+    s = slip_grid[rr, cc]
+    rake = np.radians(cfg.fault_rake_deg)
+    L = cfg.block_spacing_m / 1e3
+    return cc * L, rr * L, -np.sin(rake) * s, np.cos(rake) * s
+
+
+def displacement_map(rupture, path=None, frame=-1, n_points=30, field=None):
+    """Three maps of an event at one frame (default: its end): slip on the fault with the motion of
+    the hanging wall; the displacement vector field at the surface (arrows: horizontal, colour:
+    vertical); the gravity change at the surface (dislocation model). Returns the path written,
+    or (fig, axes) with path=None."""
+    from . import rupture as rp
+    cfg = rupture.config
+    panels = _rupture_panels(rupture, n_points) if field is None else field
+    field, xs, ys, hypo_fault, epicentre, outline = panels
+    f = field[frame]
+    slip = rp.slip_grid(rupture, frame)
+    L = cfg.block_spacing_m / 1e3
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.4))
+    ax = axes[0]
+    extent = (-0.5 * L, (cfg.n_blocks_x - 0.5) * L, -0.5 * L, (cfg.n_blocks_y - 0.5) * L)
+    im = ax.imshow(slip, origin='lower', extent=extent, cmap='magma_r', vmin=0,
+                   vmax=max(float(rupture.final_slip.max()), 1e-9))
+    fig.colorbar(im, ax=ax, label='slip (m)')
+    qx, qy, qu, qv = _slip_arrows(cfg, slip)
+    final_max = max(float(rupture.final_slip.max()), 1e-12)
+    ax.quiver(qx, qy, qu, qv, color='tab:cyan', angles='xy', width=0.004, scale=final_max * qx.shape[1] / 1.2)
+    ax.plot(*hypo_fault, marker='*', ms=16, mfc='yellow', mec='k')
+    ax.set(xlabel='x, down dip on the fault (km)', ylabel='y, along strike (km)', title='Slip on the fault')
+    ax = axes[1]
+    dz = f[:, 2].reshape(len(ys), len(xs))
+    im = ax.pcolormesh(xs, ys, dz, cmap=CMAP, norm=symmetric_norm(field[-1][:, 2]), shading='auto')
+    fig.colorbar(im, ax=ax, label='vertical displacement (m)')
+    scale = max(float(np.hypot(field[-1][:, 0], field[-1][:, 1]).max()), 1e-12)
+    ax.quiver(xs[None, :].repeat(len(ys), 0), ys[:, None].repeat(len(xs), 1), f[:, 0].reshape(dz.shape),
+              f[:, 1].reshape(dz.shape), angles='xy', scale=scale * len(xs) / 1.5, width=0.003)
+    ax.plot(*outline, color='0.4', lw=1)
+    ax.plot(*epicentre, marker='*', ms=16, mfc='yellow', mec='k')
+    ax.set(xlabel='X, horizontal down-dip (km)', ylabel='Y, along strike (km)',
+           title='Surface displacement (max horizontal %.2g m)' % scale)
+    ax = axes[2]
+    dg = f[:, 3].reshape(dz.shape) * 1e8
+    im = ax.pcolormesh(xs, ys, dg, cmap=CMAP, norm=symmetric_norm(field[-1][:, 3] * 1e8), shading='auto')
+    fig.colorbar(im, ax=ax, label='gravity change (uGal)')
+    ax.plot(*outline, color='0.4', lw=1)
+    ax.plot(*epicentre, marker='*', ms=16, mfc='yellow', mec='k')
+    ax.set(xlabel='X, horizontal down-dip (km)', ylabel='Y, along strike (km)', title='Surface gravity change')
+    for a in axes:
+        a.set_aspect('equal')
+    ev = rupture.event
+    fig.suptitle('Mw %.2f event at %.2f years: t = %.1f s after the start'
+                 % (ev.magnitude, ev.start_years, rupture.frame_times_s[frame]))
+    fig.tight_layout()
+    if path is None:
+        return fig, axes
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    return path
+
+
+def rupture_animation(rupture, path, n_points=30, fps=12, writer=None):
+    """Animation of displacement_map over the frames of the rupture (MP4 with ffmpeg, else GIF)."""
+    panels = _rupture_panels(rupture, n_points)
+    fig, axes = displacement_map(rupture, None, frame=0, field=panels)
+    field, xs, ys = panels[0], panels[1], panels[2]
+    from . import rupture as rp
+    image = axes[0].images[0]
+    meshes = [axes[1].collections[0], axes[2].collections[0]]
+    quiver = [c for c in axes[1].collections if isinstance(c, matplotlib.quiver.Quiver)][0]
+    slip_quiver = [c for c in axes[0].collections if isinstance(c, matplotlib.quiver.Quiver)][0]
+    title = fig._suptitle
+    ev = rupture.event
+
+    def update(k):
+        slip = rp.slip_grid(rupture, k)
+        image.set_data(slip)
+        slip_quiver.set_UVC(*_slip_arrows(rupture.config, slip)[2:])
+        f = field[k]
+        meshes[0].set_array(f[:, 2].reshape(len(ys), len(xs)).ravel())
+        meshes[1].set_array((f[:, 3] * 1e8).reshape(len(ys), len(xs)).ravel())
+        quiver.set_UVC(f[:, 0], f[:, 1])
+        title.set_text('Mw %.2f event at %.2f years: t = %.1f s after the start'
+                       % (ev.magnitude, ev.start_years, rupture.frame_times_s[k]))
+        return []
+
+    anim = animation.FuncAnimation(fig, update, frames=len(rupture.frame_times_s), interval=1000 / fps, blit=False)
+    if writer is None:
+        writer = 'ffmpeg' if _ffmpeg_available() else 'pillow'
+    if writer == 'pillow' and not path.endswith('.gif'):
+        path = os.path.splitext(path)[0] + '.gif'
+    anim.save(path, writer=writer, fps=fps, dpi=80)
+    plt.close(fig)
+    return path
