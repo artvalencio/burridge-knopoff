@@ -55,6 +55,11 @@ CONDITIONS = {
     'W-C': dict(tides=True, **WEAKENING),
 }
 THRESHOLDS_UGAL = (0.1, 1.0, 10.0)
+# the control of each condition: the same stepping without tide (B) for the tidal runs, the exact
+# jumps (A) for B, and the tide-free weakening run for its tidal twin. Runs with the same seed
+# share only their initial strengths: the model is chaotic, so microsecond differences in
+# failure times decorrelate the histories, and conditions are compared as independent samples.
+CONTROLS = {'B': 'A', 'C': 'B', 'Dm': 'B', 'Ds': 'B', 'E10': 'B', 'E100': 'B', 'E1000': 'B', 'W-C': 'W-A'}
 
 
 def config(size, condition, seed):
@@ -159,6 +164,14 @@ def _bootstrap_ci(values, n=2000, seed=0):
     return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
 
 
+def _diff_ci(a, b, n=4000, seed=0):
+    # bootstrap CI of mean(a) - mean(b), independent samples
+    rng = np.random.default_rng(seed)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    d = rng.choice(a, (n, len(a))).mean(axis=1) - rng.choice(b, (n, len(b))).mean(axis=1)
+    return float(np.quantile(d, 0.025)), float(np.quantile(d, 0.975))
+
+
 def report(size, reference='A'):
     from scipy import stats
     import matplotlib
@@ -189,21 +202,26 @@ def report(size, reference='A'):
             vals = np.array([summaries[c][s].get(k, np.nan) for s in seeds], dtype=float)
             row[k] = float(np.nanmean(vals))
             row[k + '_ci'] = _bootstrap_ci(vals)
-        if c != reference and reference in summaries:
-            common = sorted(set(seeds) & set(summaries[reference]))
-            if len(common) >= 5:
-                for k in ('n_events', 'n_above_mc', 'n_mw7', 'b'):
-                    diff = np.array([summaries[c][s][k] - summaries[reference][s][k] for s in common], dtype=float)
-                    row['paired_diff_' + k] = float(np.mean(diff))
-                    row['paired_diff_%s_ci' % k] = _bootstrap_ci(diff)
-                    nonzero = diff[diff != 0]
-                    row['wilcoxon_p_' + k] = float(stats.wilcoxon(nonzero).pvalue) if len(nonzero) >= 5 else np.nan
-                mags = [np.concatenate([runs[x][s].catalogue['magnitude'][runs[x][s].catalogue['start_years'] >= 20]
-                                        for s in common]) for x in (reference, c)]
-                dgs = [np.concatenate([runs[x][s].catalogue['dg_max_abs_ugal'][runs[x][s].catalogue['start_years'] >= 20]
-                                       for s in common]) for x in (reference, c)]
-                row['ad_p_magnitude'] = float(stats.anderson_ksamp(mags).pvalue)
-                row['ad_p_dg'] = float(stats.anderson_ksamp(dgs).pvalue)
+        control = CONTROLS.get(c)
+        if control in summaries:
+            row['control'] = control
+            other = sorted(summaries[control])
+            for k in ('n_events', 'n_above_mc', 'n_mw7', 'b'):
+                a = np.array([summaries[c][s][k] for s in seeds], dtype=float)
+                b = np.array([summaries[control][s][k] for s in other], dtype=float)
+                row['diff_' + k] = float(np.mean(a) - np.mean(b))
+                row['diff_%s_ci' % k] = _diff_ci(a, b)
+                row['mannwhitney_p_' + k] = float(stats.mannwhitneyu(a, b).pvalue)
+                row['relative_diff_' + k] = float((np.mean(a) - np.mean(b)) / np.mean(b))
+            pooled = lambda x, key: np.concatenate([r.catalogue[key][r.catalogue['start_years'] >= r.config.spinup_years]
+                                                    for r in runs[x].values()])
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')    # anderson_ksamp caps p-values to [0.001, 0.25]
+                row['ad_p_magnitude'] = float(stats.anderson_ksamp([pooled(control, 'magnitude'),
+                                                                     pooled(c, 'magnitude')]).pvalue)
+                row['ad_p_dg'] = float(stats.anderson_ksamp([pooled(control, 'dg_max_abs_ugal'),
+                                                              pooled(c, 'dg_max_abs_ugal')]).pvalue)
         rows.append(row)
     with open(os.path.join(folder, 'summary.json'), 'w') as fh:
         json.dump(dict(rows=rows, per_run=summaries), fh, indent=1, default=float)
@@ -223,15 +241,16 @@ def _fmt(v, ci=None, digits=3):
 
 def _table(rows, path):
     lines = ['| condition | seeds | events after spin-up | Mw >= 7 | b | Schuster p | events with dg >= 1 uGal '
-             '| dg-Mw slope | paired diff. events (vs A) | Wilcoxon p | AD p (Mw) | AD p (dg) | time per run (s) |',
-             '|' + '---|' * 13]
+             '| dg-Mw slope | control | diff. events vs control | Mann-Whitney p | diff. b | AD p (Mw) | AD p (dg) '
+             '| time per run (s) |',
+             '|' + '---|' * 15]
     for r in rows:
-        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (
+        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |' % (
             r['condition'], r['n_seeds'], _fmt(r['n_events'], r['n_events_ci'], 6), _fmt(r['n_mw7']),
             _fmt(r['b'], r['b_ci']), _fmt(r['schuster_p'], None, 2), _fmt(r['n_dg_above_1'], None, 6),
-            _fmt(r['dg_mw_slope']), _fmt(r.get('paired_diff_n_events'), r.get('paired_diff_n_events_ci'), 4),
-            _fmt(r.get('wilcoxon_p_n_events'), None, 2), _fmt(r.get('ad_p_magnitude'), None, 2),
-            _fmt(r.get('ad_p_dg'), None, 2), _fmt(r['elapsed_s'])))
+            _fmt(r['dg_mw_slope']), r.get('control', '-'), _fmt(r.get('diff_n_events'), r.get('diff_n_events_ci'), 4),
+            _fmt(r.get('mannwhitney_p_n_events'), None, 2), _fmt(r.get('diff_b'), r.get('diff_b_ci'), 2),
+            _fmt(r.get('ad_p_magnitude'), None, 2), _fmt(r.get('ad_p_dg'), None, 2), _fmt(r['elapsed_s'])))
     with open(path, 'w') as fh:
         fh.write('\n'.join(lines) + '\n')
 
