@@ -15,10 +15,16 @@ the Moon and the Sun, and tools from nonlinear dynamics to study it.
 - Earth tides (Moon and Sun): tidal shear, unclamping and body force on the blocks, steps of at
   most one hour between events, tidal statistics of the catalogue
 - an animation of the gravity in the year before an event, one frame per hour (tides removed)
+- strain build-up and precursory slip (optional): the gravity of fault slip in an elastic
+  half-space, including the slip deficit that grows between events (Okada, 1985; Okubo, 1992;
+  Savage, 1983), and rate-and-state nucleation creep of the blocks before they fail
+  (Dieterich, 1992)
+- maps and animations of the displacement vector field during an event: slip on the fault,
+  surface displacement and surface gravity
 - nonlinear dynamics: Lyapunov exponents, embedding, recurrence, synchronisation and
   information flow (with the CaMI toolbox)
 - NPZ/CSV output, animations, event maps and magnitude-frequency plot
-- 185 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
+- 213 tests (plus time/memory/statistics budgets), including analytic checks of the dynamics
 
 ![Potential change before and after a Mw 7.1 event starting at the centre of the grid, (250, 248) km (default 500 km run)](docs/event_comparison_500km.png)
 
@@ -46,6 +52,8 @@ result.gravity               # (samples, sensors) change of the downward gravity
 result.catalogue             # structured array of events
 
 tidal = run(SimulationConfig(n_blocks_x=50, n_blocks_y=50, tides=True))   # Moon and Sun tides
+creep = run(SimulationConfig(n_blocks_x=50, n_blocks_y=50, preslip=True,  # creep before failures,
+                             gravity_model='dislocation'))                # gravity of the slip deficit
 save_results(result, 'my_run')
 ```
 
@@ -110,7 +118,8 @@ Mw = (2/3)(log₁₀ M₀ − 9.1).
 
     ΔΦ_s = −G m Σ_b ( 1/|r_s − r_b − u_b x̂| − 1/|r_s − r_b| ).
 
-Blocks are stuck between events, so ΔΦ only changes at events. After each
+Blocks are stuck between events, so ΔΦ only changes at events (unless they creep, or
+gravity follows the slip deficit: see Strain build-up and precursory slip). After each
 event it is updated from the slipped blocks alone. Every term is evaluated in
 a cancellation-free form, never as the difference of two large totals. The
 acceleration is g = −∇Φ, pointing towards the masses (`gravity.acceleration`).
@@ -162,8 +171,140 @@ records the sensors every hour of the year before it
 the start of the window; with tides it shows the gravity residuals, the tide
 removed exactly (`--tide-removal model`) or by a least-squares fit of the main
 constituents as for real data (`fit`). The series at the sensor nearest the
-hypocentre runs below the map. In the 2-D model the field only changes at
-the events of the window: blocks are stuck in between.
+hypocentre runs below the map. With the default point-mass gravity the field
+only changes at the events of the window (blocks are stuck in between); with
+`--gravity-model dislocation` it also follows the growing slip deficit, and with
+`--preslip` the creep of the blocks before they fail.
+
+## Strain build-up and precursory slip
+
+Two optional additions make gravity change between earthquakes.
+
+**Gravity of the slip deficit** (`gravity_model='dislocation'`,
+`--gravity-model dislocation`; `burridge_knopoff/dislocation.py`). Each block is
+a 2 km × 2 km patch of a planar thrust in an elastic half-space, dipping at
+`fault_dip_deg` (10°) from a top edge at `fault_top_depth_m` (5 km) and slipping
+along `fault_rake_deg` (88°). On the fault, x runs down dip and y along strike.
+The sensors lie on the free surface above: X horizontal and down dip, Y along
+strike. The gravity change at a point of the deforming surface is Okubo's
+(1992) closed form, which includes:
+- the density change from the dilatation,
+- the raised or lowered surface layer,
+- the free-air change of the gravimeter's height (0.3086 mGal/m).
+
+The surface displacements are Okada's (1985).
+
+In the back-slip picture (Savage, 1983), steady slip of the whole interface at
+the plate rate only moves the plates rigidly. The deformation is therefore that
+of the slip deficit:
+
+    Δg_s(t) = Σ_b G_sb [u_b(t) − u_b(0) − (x_p(t) − x_p(0))]
+
+Here G_sb is the gravity at sensor s per metre of slip on block b. It is
+computed once (float32; 156 MB and 4 s for the default grid).
+
+- **Between events:** gravity changes steadily, by about 3 µGal per year at the
+  default sensors (4.5 at most).
+- **At each event:** part of the accumulated deficit is released.
+- **Over many cycles:** the blocks keep up with the plate, so the field stays
+  bounded. The point-mass gravity, by contrast, drifts at the free edges: ±7 µGal
+  against ±80 µGal after 30 years on a 100 km grid.
+
+The potential stays the point-mass one.
+
+**Precursory creep** (`preslip=True`, `--preslip`; `burridge_knopoff/nucleation.py`).
+A stuck block creeps at
+
+    v = v_s exp(Γ / aσ),     Γ = (F + C − S) / A
+
+- F is the spring force, C the tidal Coulomb force, S the strength and A the
+  block area.
+- Γ is the stress excess over the strength, negative while the block is stuck.
+- The block fails, and the event starts, when Γ reaches 0, creeping at
+  v_s = 1 cm/s.
+
+Creep by δ unloads the block's own springs (k_sum δ). It also weakens its
+strength by (bσ/D_c) A δ: this is the evolution of the rate-and-state variable
+during nucleation (Dieterich, 1992). So
+
+    dΓ/dt = r + Hσ v,     Hσ = bσ/D_c − k_sum/A > 0
+
+For a constant stressing rate r this has an exact solution, which the
+integrator uses step by step:
+
+    time to instability   T = ln(1 + sQ) / s,                      s = r/aσ,  Q = aσ/(Hσ v₀)
+    creep over a step h   δ = −(aσ/Hσ) ln[1 − Hσ v₀ (e^(sh) − 1) / (s aσ)]
+
+How the integrator handles coupled blocks:
+- **Coupling:** blocks interact through r (plate, tide and the creep of their
+  neighbours), which a predictor-corrector updates between steps.
+- **Step control:** steps halve towards the next instability. A step is also
+  halved when the neighbours' creep would change a block's stress by more than
+  0.05 aσ.
+- **Slow blocks:** blocks far from failure creep once per call, at their exact
+  rate.
+- **Reproducibility:** calls end on a fixed hourly grid, so replays (pre-seismic
+  frames, rupture maps) reproduce the run exactly.
+
+Defaults: aσ = 10 kPa, b/a = 1.5, D_c = 20 µm, and creep below 10⁻¹⁵ m/s is
+neglected. bσ/D_c must exceed the block stiffness, 300 MPa/m by default;
+`validate` checks this.
+
+Results on 50 × 50 blocks, 40 years after a 10-year spin-up, 6 seeds:
+- **Aftershocks.** Nucleation takes t_a = aσ/τ̇ ≈ 27 days and begins about
+  aσ ln(v_s Hσ/τ̇) ≈ 0.2 MPa below the strength. Blocks that an event brings
+  close to failure therefore fail within hours to weeks. The result is
+  Omori-type aftershock sequences and 3.7 times as many events (5,001 ± 44
+  against 1,349 ± 19).
+- **Creep before failure is tiny.** The hypocentre creeps 0.3 mm (median; at
+  most 0.46 mm) before it fails, and 1.5·10⁻⁴ of all slip is aseismic. One
+  millimetre of creep on one block changes the surface gravity by at most
+  ~6·10⁻⁴ µGal. That is far below gravimeter precision and below one day of
+  the back-slip trend. In this model, precursory creep cannot be seen by
+  gravimetry.
+- **Realistic tidal triggering.** The tide's 12.4-hour period is far shorter
+  than t_a, so a 0.4 kPa tide changes the rate of events by only a few per
+  cent. The strong locking of the threshold model disappears (declustered
+  catalogues; about 1,650 mainshocks per run):
+
+| Tides | Schuster p (6 seeds) | Rate in the lowest → highest tidal-stress decile |
+|---|---|---|
+| none (null) | 0.17–0.85 | 0.96 … 0.99 (flat within ±7 %) |
+| real (Moon + Sun) | 0.10–0.87 | 0.95 … 0.97 (flat within ±10 %) |
+| × 10 | 0.007–0.17 | 0.75 → 1.09 |
+| × 100 | ≈ 0 | 0.03 → 3.56 |
+| real, without creep (threshold model) | ≈ 0 | 0 → 1.5 (peak 1.8) |
+
+  Rate-and-state theory predicts this (Dieterich, 1987; Beeler & Lockner,
+  2003): the tide matters when its stress amplitude approaches aσ.
+  `tidal_statistics` declusters creep runs by default, dropping events within
+  10 days and 30 km of a larger one (Gardner & Knopoff, 1974). Aftershock
+  bursts break the independence the Schuster test assumes: without
+  declustering, even runs without tides give p ≈ 10⁻³.
+- **Cost.** About 12 times the default: 243 s for 30 years at full size, with
+  84,100 events against 15,079.
+
+## Displacement during events
+
+`python main.py --rupture [EVENT]` (`burridge_knopoff/rupture.py`) replays the
+run up to an event, by default the largest after the spin-up. During the event
+it records the block displacements every few integration steps
+(`--rupture-frames`, default 60). It writes `plots/rupture_event_K.png` and
+`plots/rupture_event_K.mp4`, each with three maps:
+- the slip on the fault, with arrows for the motion of the hanging wall;
+- the displacement vector field at the surface (arrows: horizontal; colour:
+  vertical);
+- the surface gravity change.
+
+The surface fields come from Okada's and Okubo's solutions for the slip reached
+at each frame. They are static: they show the final deformation of the slip so
+far, not the elastic waves that carry it. Large ruptures are summed over coarse
+patches (2 × 2, 4 × 4, … blocks; at most 3,000 patches). This is exact for
+uniform slip and accurate away from the fault. From Python:
+`rupture.replay(result, k)`, `rupture.surface_frames`,
+`visualization.displacement_map`, `visualization.rupture_animation`.
+
+![Slip, surface displacement and gravity at the end of a Mw 7.4 event (100 × 100 blocks)](docs/rupture_map_200km.png)
 
 ## Nonlinear dynamics
 
@@ -199,6 +340,8 @@ unit; the documentation is `help(burridge_knopoff.SimulationConfig)`.
 | loading | `plate_velocity_m_per_year` (0.09), `shear_modulus_pa` (30 GPa, for the moment) |
 | sensors | `n_sensors_x`, `n_sensors_y` (25, 25), `sensor_height_m` (5000) |
 | gravity maps | `gravity_map_min_magnitude` (6.5): events at least this large keep their full co-seismic maps |
+| gravity model | `gravity_model` ('point-mass', or 'dislocation': fault slip in a half-space), `fault_top_depth_m` (5000); the dislocation model also uses `fault_dip_deg`, `fault_rake_deg` and `poisson_ratio` |
+| precursory creep | `preslip` (False), `rs_a_sigma_pa` (10 kPa), `rs_b_over_a` (1.5), `rs_dc_m` (20 µm), `rs_seismic_velocity_m_s` (0.01), `rs_min_velocity_m_s` (10⁻¹⁵) |
 | tides | `tides` (False), `tide_bodies` ('moon,sun'), `tide_stress`, `tide_body_force` (True), `tide_scale` (1), `tide_step_hours` (1), `tide_spatial` ('linear'), `epoch_utc`, `centre_latitude_deg`, `centre_longitude_deg`, `fault_strike_deg`, `fault_dip_deg`, `fault_rake_deg`, `friction_coefficient` (0.6), `love_h2`, `love_l2`, `love_k2`, `poisson_ratio`, `skempton_b` |
 | dynamics | `rng_mode` ('global' or 'per-block'), `n_regions_x`, `n_regions_y` (5, 5: per-event regional moments), `record_energy` (False) |
 | schedule | `simulation_years` (100), `sample_interval_years` (0.01), `snapshot_interval_years` (1), `steps_per_period` (100), `spinup_years` (20, left out of the statistics), `seed` (0) |
@@ -215,7 +358,9 @@ spin-up (`--spinup`) for one run, and turn on the optional physics:
 `--weakening V_W DROP` and `--range R`. Tides: `--tides`, `--tide-scale S`,
 `--tide-bodies moon sun`, `--tide-step HOURS`. Pre-seismic animation:
 `--preseismic [EVENT]`, `--preseismic-years`, `--frame-hours`,
-`--tide-removal model|fit`. Others: `--output DIR`, `--stream` (write series to disk while
+`--tide-removal model|fit`. Strain and creep: `--gravity-model point-mass|dislocation`,
+`--fault-depth METRES`, `--preslip`, `--rs-a-sigma PA`, `--rs-dc METRES`. Rupture maps:
+`--rupture [EVENT]`, `--rupture-frames N`. Others: `--output DIR`, `--stream` (write series to disk while
 simulating), `--block-csv`, `--no-plots`, `--max-frames N`, `--no-progress` (hide the
 progress bar, which shows simulated years, the event count and the time
 remaining). Exit status: 0 on
@@ -233,12 +378,14 @@ In `output/data`:
 | `sensor_potentials.csv` | time_years and one column per sensor (J/kg) |
 | `sensor_gravity.csv` | time_years and one column per sensor (µGal, change of the downward gravity) |
 | `preseismic_event_K.npz` | with `--preseismic`: the hourly frames of the window |
+| `rupture_event_K.npz` | with `--rupture`: frame times, slipped blocks and their slip at each frame |
 | `sensor_positions.csv`, `block_positions.csv` | coordinates, written once |
 | `block_displacements.csv` | only with `--block-csv`: time and one column per block (m) |
 
 In `output/plots`: `gravity_potential_animation.mp4` (or `.gif`),
 `event_N_comparison.png` for the three largest events,
-`magnitude_frequency.png`, and with `--preseismic` `preseismic_event_K.mp4`.
+`magnitude_frequency.png`, with `--preseismic` `preseismic_event_K.mp4`, and with
+`--rupture` `rupture_event_K.png` and `rupture_event_K.mp4`.
 
 Indexing convention: per-block arrays are row-major, block = row × n_blocks_x
 + column, with columns along x and rows along y. Sensors follow the same rule.
@@ -255,7 +402,10 @@ The default grid is now 250 × 250 blocks (500 km × 500 km) with 25 × 25 senso
 124,577 events in 100 years, 190–360 s on the same machine (measured spread;
 about 240 s with the gravity kernel), 130 MB peak memory, 225 MB of data and 7 MB
 of plots. With tides: about 380 s (the tide table is built once per process and
-reused by the seeds of an ensemble). Per-event work includes
+reused by the seeds of an ensemble). The dislocation gravity adds about 3 s and
+156 MB (its matrix). Precursory creep costs about 12 times the default (30 years at
+full size: 243 s against 21 s), mostly because of the extra aftershocks
+(84,100 events against 15,079). Per-event work includes
 a few O(n) steps (the next failure, the plate shift), so time grows faster
 than the number of blocks.
 
@@ -291,6 +441,25 @@ The tests check, among other things:
   samples; advancing in pieces and restoring snapshots give the same future.
 - **Dynamics:** Hénon and Lorenz exponents and dimensions, RQA of sine vs noise, coupled
   logistic links, forced phase locking, event map vs two trajectories.
+- **Dislocations:**
+  - Okada's (1985) check list: six displacement components, to four digits.
+  - Vertical faults agree with the limit of steep ones.
+  - Geometry: four block patches equal one patch twice as large, and coarse
+    patches are exact for uniform slip.
+  - Shear slip conserves mass: Okubo's surface mass integrates to zero, the
+    remainder falling as 1/R with the window.
+  - A thrust lifts the surface and pushes it trenchwards.
+  - In runs, the gravity equals that of the slip deficit.
+- **Precursory creep:**
+  - Dieterich's (1992) exact single-block solution, to 10⁻⁶.
+  - Coupled 3 × 3 grids against brute-force RK4 integration (failure time to
+    0.5 %, creep to 2 %), also under an amplified tide.
+  - The forces stay consistent with the displacements.
+  - The creep enters the gravity exactly.
+  - Replays reproduce the events.
+  - Declustering.
+- **Rupture maps:** the replay reproduces the event and its total slip; slip never decreases
+  from frame to frame; the surface fields match a direct sum.
 
 **Magnitude statistics.** `burridge_knopoff.analysis` estimates the b-value
 by maximum likelihood (Aki, 1965), and uses the truncated estimator of Page
@@ -341,7 +510,7 @@ cutoff together; the estimators above separate the two.
 
 ```bash
 pip install -e .[test]
-pytest              # 188 fast tests
+pytest              # 213 fast tests
 pytest -m slow      # time/memory budgets and long-run statistics
 ```
 
@@ -448,11 +617,18 @@ so it overstates this locking compared with real faults.
 
 - The model is a simplified Burridge-Knopoff system: a single layer of blocks
   with springs and static/dynamic (optionally velocity-weakening) friction.
-  Long-range coupling is truncated at a finite range. There is no
-  rate-and-state friction, and no wave radiation.
+  Long-range coupling is truncated at a finite range. There is no wave
+  radiation. Rate-and-state friction (optional) governs only the nucleation
+  creep: blocks still fail at a threshold and slip with Coulomb or
+  velocity-weakening friction, and heal only through the strength redraw.
+- Precursory creep acts block by block (2 km). With laboratory-like D_c and the
+  stiff coupling of the grid it stays below a millimetre; collective slow slip
+  would need softer coupling or velocity-strengthening regions.
 - Parameters are mutually consistent, not calibrated to a particular fault.
-- Blocks are point masses for gravity; only their slip along x changes the
-  potential.
+- Gravity: in the default model the blocks are point masses that move along x
+  only. The dislocation model is a homogeneous elastic half-space (flat
+  surface, no ocean layer, no layering, no self-gravitation, no viscoelastic
+  relaxation), with the 2-D grid mapped onto one planar fault.
 - Sensor samples falling inside an event (which lasts seconds) show the state
   after the event.
 - Tides: solid-Earth body tide only (no ocean loading, which can dominate near
@@ -472,6 +648,9 @@ burridge-knopoff/
 │   ├── tides.py              # Moon and Sun tides: potential, strain, stress on the fault
 │   ├── tide_analysis.py      # Schuster test, rate vs tidal stress
 │   ├── preseismic.py         # hourly replays before events, tide removal
+│   ├── dislocation.py        # Okada (1985) displacement, Okubo (1992) gravity of fault slip
+│   ├── nucleation.py         # rate-and-state creep before failure (exact steps)
+│   ├── rupture.py            # replay of an event frame by frame, surface fields
 │   ├── dynamics/             # Lyapunov, embedding, recurrence, synchronisation, information
 │   ├── events.py             # catalogue, moment, magnitude
 │   ├── analysis.py           # b-value, completeness, local slopes
@@ -485,14 +664,117 @@ burridge-knopoff/
 └── benchmarks/run.py         # timings and memory peaks
 ```
 
+## Next steps
+
+- **3-D model (to do next).** Phases 3–5 of `3d_model/PLAN.md`. The fault
+  becomes rectangular or triangular elements in a 3-D elastic half-space, which
+  interact through the half-space stress solution (Okada, 1992) instead of the
+  springs. Stress transfer, the dipping geometry and the surface displacement
+  and gravity would then all come from the same elastic solution, and the plan
+  compares event counts and co-seismic gravity with and without tides as in
+  2-D. It needs a validated dislocation code for internal stresses, either
+  ported from Okada's DC3D or a package such as cutde or pyrocko (see
+  below). The tides, gravity, nucleation, replay and analysis code carries
+  over.
+- **Full-size experiments with the new physics:**
+  - the tide comparison with precursory creep (tide amplification ×1 to
+    ×100, declustered statistics);
+  - the precursor test on the dislocation gravity: whether the deficit
+    accumulated since the last event marks where large events come next;
+  - the sensitivity of nucleation and tidal triggering to aσ and D_c.
+
 ## References
 
-1. Burridge, R., & Knopoff, L. (1967). Model and theoretical seismicity. *Bulletin of the Seismological Society of America*, 57(3), 341-371.
-2. Carlson, J. M., & Langer, J. S. (1989). Mechanical model of an earthquake fault. *Physical Review A*, 40(11), 6470-6484.
-3. Hanks, T. C., & Kanamori, H. (1979). A moment magnitude scale. *Journal of Geophysical Research*, 84(B5), 2348-2350.
-4. Aki, K. (1965). Maximum likelihood estimate of b in the formula log N = a − bM and its confidence limits. *Bulletin of the Earthquake Research Institute*, 43, 237-239.
-5. Page, R. (1968). Aftershocks and microaftershocks of the great Alaska earthquake of 1964. *Bulletin of the Seismological Society of America*, 58(3), 1131-1168.
-6. Scholz, C. H. (2002). *The Mechanics of Earthquakes and Faulting* (2nd ed.). Cambridge University Press.
+Model, seismicity and statistics
+1. Aki, K. (1965). Maximum likelihood estimate of b in the formula log N = a − bM and its confidence limits. *Bulletin of the Earthquake Research Institute*, 43, 237–239.
+2. Ben-Zion, Y., & Rice, J. R. (1993). Earthquake failure sequences along a cellular fault zone in a three-dimensional elastic solid containing asperity and nonasperity regions. *Journal of Geophysical Research*, 98(B8), 14109–14131.
+3. Burridge, R., & Knopoff, L. (1967). Model and theoretical seismicity. *Bulletin of the Seismological Society of America*, 57(3), 341–371.
+4. Carlson, J. M., & Langer, J. S. (1989). Mechanical model of an earthquake fault. *Physical Review A*, 40(11), 6470–6484.
+5. Gardner, J. K., & Knopoff, L. (1974). Is the sequence of earthquakes in Southern California, with aftershocks removed, Poissonian? *Bulletin of the Seismological Society of America*, 64(5), 1363–1367.
+6. Hanks, T. C., & Kanamori, H. (1979). A moment magnitude scale. *Journal of Geophysical Research*, 84(B5), 2348–2350.
+7. Olami, Z., Feder, H. J. S., & Christensen, K. (1992). Self-organized criticality in a continuous, nonconservative cellular automaton modeling earthquakes. *Physical Review Letters*, 68, 1244–1247.
+8. Page, R. (1968). Aftershocks and microaftershocks of the great Alaska earthquake of 1964. *Bulletin of the Seismological Society of America*, 58(3), 1131–1168.
+9. Scholz, C. H. (2002). *The Mechanics of Earthquakes and Faulting* (2nd ed.). Cambridge University Press.
+10. Ward, S. N. (2000). San Francisco Bay Area earthquake simulations: a step toward a standard physical earthquake model. *Bulletin of the Seismological Society of America*, 90(2), 370–386.
+
+Friction, nucleation and earthquake simulators
+11. Dieterich, J. H. (1979). Modeling of rock friction: 1. Experimental results and constitutive equations. *Journal of Geophysical Research*, 84(B5), 2161–2168.
+12. Dieterich, J. H. (1987). Nucleation and triggering of earthquake slip: effect of periodic stresses. *Tectonophysics*, 144, 127–139.
+13. Dieterich, J. H. (1992). Earthquake nucleation on faults with rate- and state-dependent strength. *Tectonophysics*, 211, 115–134.
+14. Dieterich, J. (1994). A constitutive law for rate of earthquake production and its application to earthquake clustering. *Journal of Geophysical Research*, 99(B2), 2601–2618.
+15. Richards-Dinger, K., & Dieterich, J. H. (2012). RSQSim earthquake simulator. *Seismological Research Letters*, 83(6), 983–990.
+16. Rubin, A. M., & Ampuero, J.-P. (2005). Earthquake nucleation on (aging) rate and state faults. *Journal of Geophysical Research*, 110, B11312.
+17. Ruina, A. (1983). Slip instability and state variable friction laws. *Journal of Geophysical Research*, 88(B12), 10359–10370.
+
+Deformation and gravity of fault slip
+18. Farrell, W. E. (1972). Deformation of the Earth by surface loads. *Reviews of Geophysics*, 10(3), 761–797.
+19. Okada, Y. (1985). Surface deformation due to shear and tensile faults in a half-space. *Bulletin of the Seismological Society of America*, 75(4), 1135–1154.
+20. Okada, Y. (1992). Internal deformation due to shear and tensile faults in a half-space. *Bulletin of the Seismological Society of America*, 82(2), 1018–1040.
+21. Okubo, S. (1991). Potential and gravity changes raised by point dislocations. *Geophysical Journal International*, 105, 573–586.
+22. Okubo, S. (1992). Gravity and potential changes due to shear and tensile faults in a half-space. *Journal of Geophysical Research*, 97(B5), 7137–7144.
+23. Savage, J. C. (1983). A dislocation model of strain accumulation and release at a subduction zone. *Journal of Geophysical Research*, 88(B6), 4984–4996.
+
+Observations of slip and gravity before large earthquakes
+24. Kato, A., Obara, K., Igarashi, T., Tsuruoka, H., Nakagawa, S., & Hirata, N. (2012). Propagation of slow slip leading up to the 2011 Mw 9.0 Tohoku-Oki earthquake. *Science*, 335, 705–708.
+25. Panet, I., Bonvalot, S., Narteau, C., Remy, D., & Lemoine, J.-M. (2018). Migrating pattern of deformation prior to the Tohoku-Oki earthquake revealed by GRACE data. *Nature Geoscience*, 11, 367–373.
+
+Earth tides and tidal triggering
+26. Agnew, D. C. (2007). Earth tides. *Treatise on Geophysics*, vol. 3, 163–195.
+27. Beeler, N. M., & Lockner, D. A. (2003). Why earthquakes correlate weakly with the solid Earth tides: effects of periodic stress on the rate and probability of earthquake occurrence. *Journal of Geophysical Research*, 108(B8), 2391.
+28. Cartwright, D. E., & Edden, A. C. (1973). Corrected tables of tidal harmonics. *Geophysical Journal of the Royal Astronomical Society*, 33, 253–264.
+29. Cochran, E. S., Vidale, J. E., & Tanaka, S. (2004). Earth tides can trigger shallow thrust fault earthquakes. *Science*, 306, 1164–1166.
+30. Ide, S., Yabe, S., & Tanaka, Y. (2016). Earthquake potential revealed by tidal influence on earthquake size–frequency statistics. *Nature Geoscience*, 9, 834–837.
+31. Meeus, J. (1998). *Astronomical Algorithms* (2nd ed.). Willmann-Bell.
+32. Petit, G., & Luzum, B. (2010). IERS Conventions (2010). IERS Technical Note 36.
+33. Schuster, A. (1897). On lunar and solar periodicities of earthquakes. *Proceedings of the Royal Society of London*, 61, 455–465.
+34. Tanaka, S., Ohtake, M., & Sato, H. (2002). Evidence for tidal triggering of earthquakes as revealed from statistical analysis of global data. *Journal of Geophysical Research*, 107(B10), 2211.
+
+Nonlinear dynamics and time-series analysis
+35. Arnold, L. (1998). *Random Dynamical Systems*. Springer.
+36. Aurell, E., Boffetta, G., Crisanti, A., Paladin, G., & Vulpiani, A. (1997). Predictability in the large: an extension of the concept of Lyapunov exponent. *Journal of Physics A*, 30, 1–26.
+37. Bandt, C., & Pompe, B. (2002). Permutation entropy: a natural complexity measure for time series. *Physical Review Letters*, 88, 174102.
+38. Benettin, G., Galgani, L., Giorgilli, A., & Strelcyn, J.-M. (1980). Lyapunov characteristic exponents for smooth dynamical systems and for Hamiltonian systems: a method for computing all of them. *Meccanica*, 15, 9–30.
+39. Bianco-Martinez, E., & Baptista, M. S. (2018). Space-time nature of causality. *Chaos*, 28, 075509.
+40. Broomhead, D. S., & King, G. P. (1986). Extracting qualitative dynamics from experimental data. *Physica D*, 20, 217–236.
+41. Cao, L. (1997). Practical method for determining the minimum embedding dimension of a scalar time series. *Physica D*, 110, 43–50.
+42. Eckmann, J.-P., Kamphorst, S. O., & Ruelle, D. (1987). Recurrence plots of dynamical systems. *Europhysics Letters*, 4, 973–977.
+43. Eckmann, J.-P., & Ruelle, D. (1992). Fundamental limitations for estimating dimensions and Lyapunov exponents in dynamical systems. *Physica D*, 56, 185–187.
+44. Fraser, A. M., & Swinney, H. L. (1986). Independent coordinates for strange attractors from mutual information. *Physical Review A*, 33, 1134–1140.
+45. Grassberger, P., & Procaccia, I. (1983). Measuring the strangeness of strange attractors. *Physica D*, 9, 189–208.
+46. Huang, J., & Turcotte, D. L. (1990). Are earthquakes an example of deterministic chaos? *Geophysical Research Letters*, 17(3), 223–226.
+47. Kantz, H. (1994). A robust method to estimate the maximal Lyapunov exponent of a time series. *Physics Letters A*, 185, 77–87.
+48. Keener, J. P., Hoppensteadt, F. C., & Rinzel, J. (1981). Integrate-and-fire models of nerve membrane response to oscillatory input. *SIAM Journal on Applied Mathematics*, 41, 503–517.
+49. Kennel, M. B., Brown, R., & Abarbanel, H. D. I. (1992). Determining embedding dimension for phase-space reconstruction using a geometrical construction. *Physical Review A*, 45, 3403–3411.
+50. Marwan, N., Romano, M. C., Thiel, M., & Kurths, J. (2007). Recurrence plots for the analysis of complex systems. *Physics Reports*, 438, 237–329.
+51. Müller, P. C. (1995). Calculation of Lyapunov exponents for dynamic systems with discontinuities. *Chaos, Solitons & Fractals*, 5, 1671–1681.
+52. Pikovsky, A., Rosenblum, M., & Kurths, J. (2001). *Synchronization: A Universal Concept in Nonlinear Sciences*. Cambridge University Press.
+53. Quian Quiroga, R., Kreuz, T., & Grassberger, P. (2002). Event synchronization: a simple and fast method to measure synchronicity and time delay patterns. *Physical Review E*, 66, 041904.
+54. Romano, M. C., Thiel, M., Kurths, J., & von Bloh, W. (2004). Multivariate recurrence plots. *Physics Letters A*, 330, 214–223.
+55. Rosenstein, M. T., Collins, J. J., & De Luca, C. J. (1993). A practical method for calculating largest Lyapunov exponents from small data sets. *Physica D*, 65, 117–134.
+56. Rosso, O. A., Larrondo, H. A., Martin, M. T., Plastino, A., & Fuentes, M. A. (2007). Distinguishing noise from chaos. *Physical Review Letters*, 99, 154102.
+57. Sauer, T. (1994). Reconstruction of dynamical systems from interspike intervals. *Physical Review Letters*, 72, 3811–3814.
+58. Sauer, T., Yorke, J. A., & Casdagli, M. (1991). Embedology. *Journal of Statistical Physics*, 65, 579–616.
+59. Schreiber, T. (2000). Measuring information transfer. *Physical Review Letters*, 85, 461–464.
+60. Schreiber, T., & Schmitz, A. (1996). Improved surrogate data for nonlinearity tests. *Physical Review Letters*, 77, 635–638.
+61. Takens, F. (1981). Detecting strange attractors in turbulence. *Lecture Notes in Mathematics*, 898, 366–381.
+62. Theiler, J. (1986). Spurious dimension from correlation integrals of filtered noise. *Physical Review A*, 34, 2427–2432.
+
+## Accessory codes
+
+Used here, or used to check this code:
+
+| Code | Use here |
+|---|---|
+| [okubo92.m](https://www.mathworks.com/matlabcentral/fileexchange/37158) (F. Beauducel, 2013, BSD licence) | MATLAB transcription of Okubo's (1992) and Okada's (1985) equations. The shear terms of `dislocation.py` follow it. |
+| [gravimetry](https://docs.rs/crate/gravimetry/latest/source/src/coseismic.rs) (Rust crate) | A port of okubo92.m v1.1.0, used as a second reading of the formulas and their Okada check values. |
+| Okada's DC3D / DC3D0 (Fortran, NIED) | Reference implementation of Okada (1992) internal deformation, the stress interactions the 3-D model needs. |
+| [cutde](https://github.com/tbenthompson/cutde) and [pyrocko](https://pyrocko.org) | Candidate half-space dislocation packages for the 3-D model (triangular and rectangular sources). |
+| RSQSim (Richards-Dinger & Dieterich, 2012) | Event-driven rate-and-state simulator. The idea of advancing nucleating elements with Dieterich's analytic solutions comes from it; no code is used. |
+| [cami](https://github.com/artvalencio/cami-python) ≥ 1.5 | Transfer entropy and causal mutual information (`dynamics.information`). |
+| [coupledlogistic](https://github.com/artvalencio/coupledlogistic) | Coupled logistic maps with known links, to validate the information measures. |
+| numpy, [numba](https://numba.pydata.org), matplotlib, tqdm | Arrays, compiled kernels (slip, creep, gravity, dislocations), plots, progress bar. |
+| scipy (optional), mpmath (tests) | k-d trees for the dynamics estimators (a compiled direct search otherwise); 50-digit reference values in the tests. |
+| [FFmpeg](https://ffmpeg.org) | MP4 animations (potential, pre-seismic gravity, ruptures). |
 
 ## License
 

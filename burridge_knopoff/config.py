@@ -69,10 +69,33 @@ class SimulationConfig:
             one sensor every 20 km over the 500 km patch).
         gravity_map_min_magnitude: events at least this large keep their full
             co-seismic gravity and potential maps (the others only summaries).
+        gravity_model: 'point-mass' (default): the gravity of the blocks as point
+            masses moving along x, at sensor_height_m above the fault. 'dislocation':
+            the gravity change at the free surface of an elastic half-space for slip
+            on a dipping fault (Okubo, 1992; see dislocation.py), the blocks being
+            patches of the fault; it includes the interseismic change of the slip
+            deficit (back slip), so gravity also changes between events. The
+            potential stays the point-mass one.
+        fault_top_depth_m: depth of the top edge of the fault (dislocation model);
+            the fault dips at fault_dip_deg and slips along fault_rake_deg.
     Observables for the dynamics analyses
         n_regions_x, n_regions_y: the grid is split into these regions; the moment
             each event releases in each region is recorded (regional_moment).
         record_energy: record the elastic energy at the sample times.
+    Precursory slip (rate-and-state nucleation; see nucleation.py)
+        preslip: stuck blocks creep at v = v_s exp(Gamma / (a sigma)) before they fail,
+            Gamma being the stress minus the strength (Pa); the strength weakens by
+            b sigma / D_c per metre of creep (state evolution during nucleation,
+            Dieterich, 1992). Failure (Gamma = 0) is reached by accelerating creep
+            instead of by the plate alone. Off by default.
+        rs_a_sigma_pa: a sigma, the direct effect times the effective normal stress:
+            the stress change that multiplies the creep rate by e.
+        rs_b_over_a: b / a (> 1: velocity weakening, required for nucleation).
+        rs_dc_m: characteristic slip distance D_c; b sigma / D_c must exceed the
+            stiffness per area of every block (k_p + coupling) / area, or creep
+            would be stable.
+        rs_seismic_velocity_m_s: v_s, the creep rate at failure (Gamma = 0).
+        rs_min_velocity_m_s: blocks creeping slower than this are left out.
     Earth tides (see tides.py)
         tides: Moon and Sun tidal forcing; the time between events is then
             stepped every tide_step_hours instead of jumped exactly. Off by default.
@@ -85,12 +108,14 @@ class SimulationConfig:
         epoch_utc: ISO time of t = 0.
         centre_latitude_deg, centre_longitude_deg: centre of the block grid.
         fault_strike_deg, fault_dip_deg, fault_rake_deg: orientation used to resolve
-            the tidal stress (default: the 2011 Tohoku-oki mechanism). Model x points
+            the tidal stress (default: the 2011 Tohoku-oki mechanism); dip and rake also
+            set the geometry of the dislocation gravity model. Model x points
             along the down-dip azimuth (strike + 90), y along the strike.
         friction_coefficient: static friction coefficient mu_s; the normal stress
             changes the strength by mu_s and the sliding friction by mu_d =
             mu_s F_d / F_s, per unit area.
-        love_h2, love_l2, love_k2, poisson_ratio: elastic response of the Earth.
+        love_h2, love_l2, love_k2, poisson_ratio: elastic response of the Earth
+            (poisson_ratio also for the dislocation model).
         skempton_b: undrained pore-pressure response (0: drained).
     Schedule
         simulation_years: simulated time.
@@ -130,9 +155,18 @@ class SimulationConfig:
     n_sensors_y: int = 25
     sensor_height_m: float = 5000.0
     gravity_map_min_magnitude: float = 6.5
+    gravity_model: str = 'point-mass'
+    fault_top_depth_m: float = 5000.0
     n_regions_x: int = 5
     n_regions_y: int = 5
     record_energy: bool = False
+
+    preslip: bool = False
+    rs_a_sigma_pa: float = 10e3
+    rs_b_over_a: float = 1.5
+    rs_dc_m: float = 2e-5
+    rs_seismic_velocity_m_s: float = 0.01
+    rs_min_velocity_m_s: float = 1e-15
 
     tides: bool = False
     tide_bodies: str = 'moon,sun'
@@ -218,6 +252,16 @@ class SimulationConfig:
         """mu_d = mu_s F_d / F_s: how much the sliding friction changes with normal stress."""
         return self.friction_coefficient * self.dynamic_friction_stress_pa / self.static_friction_stress_pa
 
+    @property
+    def rs_b_sigma_pa(self):
+        return self.rs_b_over_a * self.rs_a_sigma_pa
+
+    def max_block_stiffness_pa_m(self):
+        """Largest stiffness per area of a block: (k_p + all its coupling springs) / area."""
+        from .grid import interaction_stencil
+        weights = interaction_stencil(self)[2]
+        return (self.k_loading_n_m + self.k_coupling_n_m * weights.sum()) / self.block_area_m2
+
     def single_block_recurrence_years(self):
         """Recurrence time of an isolated block of mean strength: it slips
         2 (F_s - F_d) / k_p per event and reloads at the rate k_p v_p."""
@@ -254,6 +298,27 @@ class SimulationConfig:
             raise ValueError("rng_mode must be 'global' or 'per-block', got %r" % self.rng_mode)
         if not (self.n_regions_x >= 1 and self.n_regions_y >= 1):
             raise ValueError('n_regions_x and n_regions_y must be >= 1')
+        if self.gravity_model not in ('point-mass', 'dislocation'):
+            raise ValueError("gravity_model must be 'point-mass' or 'dislocation', got %r" % self.gravity_model)
+        if self.gravity_model == 'dislocation':
+            if not self.fault_top_depth_m > 0:
+                raise ValueError('fault_top_depth_m must be positive, got %r' % self.fault_top_depth_m)
+            if not 0 <= self.fault_dip_deg <= 90:
+                raise ValueError('fault_dip_deg must be in [0, 90], got %r' % self.fault_dip_deg)
+            if not 0 <= self.poisson_ratio < 0.5:
+                raise ValueError('poisson_ratio must be in [0, 0.5), got %r' % self.poisson_ratio)
+        if self.preslip:
+            for name in ('rs_a_sigma_pa', 'rs_dc_m', 'rs_seismic_velocity_m_s', 'rs_min_velocity_m_s'):
+                if not getattr(self, name) > 0:
+                    raise ValueError('%s must be positive, got %r' % (name, getattr(self, name)))
+            if not self.rs_b_over_a > 1:
+                raise ValueError('rs_b_over_a must exceed 1 (velocity weakening), got %r' % self.rs_b_over_a)
+            if not self.rs_min_velocity_m_s < self.rs_seismic_velocity_m_s:
+                raise ValueError('rs_min_velocity_m_s must be below rs_seismic_velocity_m_s')
+            stiffness = self.max_block_stiffness_pa_m()
+            if not self.rs_b_sigma_pa / self.rs_dc_m > stiffness:
+                raise ValueError('rs_dc_m = %g m is too large: b sigma / D_c must exceed the block stiffness '
+                                 '%.3g Pa/m, i.e. D_c < %.3g m' % (self.rs_dc_m, stiffness, self.rs_b_sigma_pa / stiffness))
         if self.tides:
             bodies = [b.strip() for b in self.tide_bodies.split(',') if b.strip()]
             if not bodies or any(b not in ('moon', 'sun') for b in bodies):

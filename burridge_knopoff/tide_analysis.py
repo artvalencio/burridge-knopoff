@@ -7,6 +7,10 @@ Tidal statistics of an event catalogue.
 - rate_vs_stress: observed / expected number of events per bin of tidal
   stress, the expected number following the time spent in each bin
   (Cochran et al., 2004).
+- decluster: mainshocks of a catalogue (space-time windows). The Schuster
+  test assumes independent events; aftershock bursts (frequent with
+  precursory creep, which gives Omori-type sequences) make it reject the
+  null even without tides, so clustered catalogues are declustered first.
 - tidal_statistics: both for a SimulationResult. The tidal series is
   computed from the configuration even when the run had no tides, which is
   the null control: a catalogue that never felt the tide must show no
@@ -47,6 +51,25 @@ def rate_vs_stress(event_times_s, series_times_s, stress, n_bins=10):
     return dict(edges=edges, observed=observed, expected=expected, ratio=ratio)
 
 
+def decluster(times_s, x_m, y_m, magnitude, window_days=10.0, radius_m=30e3):
+    """Mask of the mainshocks: an event is dropped if an event at least as large occurred less
+    than window_days before it and within radius_m of it (fixed windows, after Gardner &
+    Knopoff, 1974). Inputs in time order."""
+    times_s = np.asarray(times_s, dtype=float)
+    keep = np.ones(len(times_s), dtype=bool)
+    window = window_days * 86400.0
+    start = 0
+    for i in range(len(times_s)):
+        while times_s[start] < times_s[i] - window:
+            start += 1
+        if start < i:
+            prev = slice(start, i)
+            close = np.hypot(x_m[prev] - x_m[i], y_m[prev] - y_m[i]) <= radius_m
+            if np.any(close & (magnitude[prev] >= magnitude[i])):
+                keep[i] = False
+    return keep
+
+
 def tidal_series(config):
     """(times_s, Coulomb stress at the grid centre in Pa, unwrapped semidiurnal phase) of the
     configuration's tide, whether or not the run used it (tide_scale is ignored: the null
@@ -58,18 +81,26 @@ def tidal_series(config):
     return times, hourly.coulomb[:, 0] / config.block_area_m2, np.unwrap(phase)
 
 
-def tidal_statistics(result, spinup_years=None, min_magnitude=None, n_bins=10, series=None):
+def tidal_statistics(result, spinup_years=None, min_magnitude=None, n_bins=10, series=None, declustered=None,
+                     window_days=10.0, radius_m=30e3):
     """Schuster p-value and rate vs stress of a result's events after the spin-up.
 
     Event phases come from the configuration's tidal series (so a run without tides gives
     the null control); `series` passes a precomputed tidal_series(config) to reuse it across
-    runs of the same geometry. Returns a dict: n, schuster_p, rate (see rate_vs_stress)."""
+    runs of the same geometry. declustered: keep only mainshocks (decluster); default True with
+    precursory creep (config.preslip), False otherwise. Returns a dict: n, schuster_p, rate (see
+    rate_vs_stress)."""
     cfg = result.config
     spinup = cfg.spinup_years if spinup_years is None else spinup_years
     cat = result.catalogue
     keep = cat['start_years'] >= spinup
     if min_magnitude is not None:
         keep &= cat['magnitude'] >= min_magnitude
+    if declustered is None:
+        declustered = bool(getattr(cfg, 'preslip', False))
+    if declustered:
+        keep &= decluster(cat['start_years'] * SECONDS_PER_YEAR, cat['hypocentre_x_m'], cat['hypocentre_y_m'],
+                          cat['magnitude'], window_days, radius_m)
     t_events = cat['start_years'][keep] * SECONDS_PER_YEAR
     times, coulomb, phase = tidal_series(cfg) if series is None else series
     phases = np.interp(t_events, times, phase)

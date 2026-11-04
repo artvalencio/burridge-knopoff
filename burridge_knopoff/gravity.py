@@ -26,6 +26,11 @@ G m d_z (1/a^3 - 1/b^3), evaluated in the same cancellation-free way,
     1/a^3 - 1/b^3 = (b - a)(a^2 + a b + b^2) / (a^3 b^3),
 
 sharing b - a with the potential (gravity_change, update_blocks(..., delta_g)).
+
+With gravity_model 'dislocation' the gravity is instead that of slip on a fault in an
+elastic half-space at the free surface (dislocation.py): a fixed matrix of the gravity
+change at each sensor per metre of slip of each block (float32, blocks x sensors), and
+its row total for the back-slip trend. The potential stays the point-mass one.
 """
 import numpy as np
 from numba import njit
@@ -95,6 +100,10 @@ class SensorArray:
         self.positions = grid.sensor_positions(config)
         self.block_positions = grid.block_positions(config)
         self.block_mass = config.block_mass_kg
+        self.green = self.green_total = None
+        if config.gravity_model == 'dislocation':
+            from .dislocation import gravity_matrix
+            self.green, self.green_total = gravity_matrix(config)
 
     def potential_change(self, u):
         """Potential change (J/kg) at each sensor for block displacements u (m, along x)."""
@@ -113,10 +122,15 @@ class SensorArray:
     def update_blocks(self, delta, indices, u_before, u_after, delta_g=None):
         """Like update, with u_before/u_after given only for the blocks `indices`. If delta_g
         is given, the change of the downward gravity (m/s^2) is added to it as well."""
-        with_gravity = delta_g is not None
-        _change_kernel(delta, delta_g if with_gravity else delta, self.positions, self.block_positions,
-                       np.asarray(indices, dtype=np.int64), np.asarray(u_before, dtype=float),
-                       np.asarray(u_after, dtype=float), G * self.block_mass, with_gravity)
+        indices = np.asarray(indices, dtype=np.int64)
+        u_before = np.asarray(u_before, dtype=float)
+        u_after = np.asarray(u_after, dtype=float)
+        point_gravity = delta_g is not None and self.green is None
+        _change_kernel(delta, delta_g if point_gravity else delta, self.positions, self.block_positions,
+                       indices, u_before, u_after, G * self.block_mass, point_gravity)
+        if delta_g is not None and self.green is not None:
+            from .dislocation import accumulate
+            accumulate(self.green, indices, u_after - u_before, delta_g)
         return delta
 
     def gravity_change(self, u):

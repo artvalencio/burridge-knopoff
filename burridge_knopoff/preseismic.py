@@ -144,8 +144,8 @@ def replay(result, event_indices, window_years=1.0, frame_hours=1.0):
         g = np.zeros((n, config.n_sensors))
         phi = np.zeros((n, config.n_sensors))
 
-        def fill(start, stop, g=g, phi=phi):
-            g[start:stop] = runner.delta_g
+        def fill(start, stop, g=g, phi=phi, times=times):
+            g[start:stop] = runner.gravity_at(times[start:stop])
             phi[start:stop] = runner.delta
 
         runner.add_recorder(times, fill)
@@ -155,12 +155,18 @@ def replay(result, event_indices, window_years=1.0, frame_hours=1.0):
         while len(runner.events) < k:
             if runner.step(runner.end_s) is None:
                 raise RuntimeError('replay ended before event %d' % k)
+        if config.preslip:
+            # the blocks creep before the event: run it, the frames being filled on the way
+            again = runner.step(runner.end_s)
+            if again is None or again.hypocentre != event.hypocentre or                     abs(again.start_years - event.start_years) > 1e-9 * max(event.start_years, 1.0):
+                raise RuntimeError('replay diverged before event %d' % k)
+            continue
         wait, hypocentre = runner.next_failure(runner.end_s)
         t_next = runner.model.time_s + wait
         if hypocentre != event.hypocentre or abs(t_next - times[-1]) > 1e-6 * max(times[-1], 1.0):
             raise RuntimeError('replay diverged before event %d' % k)
-        # nothing the sensors see changes before the event: fill the frames without touching
-        # the model (loading it here would split one load in two and could change rounding)
+        # only the plate moves before the event: fill the frames without touching the model
+        # (loading it here would split one load in two and could change rounding)
         runner.record_until(t_next)
     out = []
     for k in targets:
